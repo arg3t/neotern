@@ -73,14 +73,11 @@ arguments and exits with its status.
   selects a row and a double click opens it. It also sets `sorting_strategy = 'ascending'`, so the
   best match is the first row and `<Down>` walks down, and `preview_cutoff = 0`, because the sheet
   always has room.
-- Sticky context: after attach, neotern runs `src/context.lua`. nvim-treesitter-context draws the
-  enclosing line in two floats (the line number and the code), which it hides. The plugin's lines
-  and its treesitter highlights then show in one row over the grid, in nvim's own colors, with a
-  hairline under it. The row stays (blank) while there is no context, so the grid keeps its height
-  and nvim is not resized on every cursor move.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
+  nvim-treesitter-context is off as well: its context float drew over the first text row, and the
+  breadcrumbs already name the cursor's scope.
 - Windows (`ext_multigrid`): each window has its own grid. A split is composited onto the screen
   at the position of its `win_pos`, so the screen rows hold the splits, the separators and
   anything grid 1 draws. Each float (`win_float_pos`) is its own Tern card in the layer, anchored
@@ -95,14 +92,12 @@ arguments and exits with its status.
   `recording @q` are toasts too, so they go after about 3 s. A message card shows only the last
   30 lines. 'showcmd' and 'ruler' are not drawn.
 - The loop polls pane input every 4 ms, so a redraw can wait up to 4 ms.
-- The grid is 9 rows shorter than the pty at 16 px cells: the screen surface loses 130 px to
-  Tern's chrome, the bars and the two lines over the grid (`CHROME_PX`, measured with `tern shot`).
+- The grid is 8 rows shorter than the pty at 16 px cells: the screen surface loses 114 px to
+  Tern's chrome and the bars (`CHROME_PX`, measured with `tern shot`).
 - Bars: they show nvim's foreground colors only, not the background colors. Only the current
   window's status line shows. The breadcrumbs come only from barbecue.nvim, through its
   internals (`barbecue.ui.components`), and they are not shortened to fit. Two tabs with the
   same file name have the same label.
-- Sticky context: only the first line shows, which is enough for `max_lines = 1`. It follows the
-  current window, so a split shows the context of the window the cursor is in.
 - Mouse input and undercurl colors are not supported.
 - Floats: a float keeps its own border cells inside Tern's card, so a bordered float shows both.
   A float does not blend with the text under it, and a float wider than the surface is clipped by

@@ -59,7 +59,6 @@ const PALETTE_CSS: &str = "
 [data-role='cur-h']::after { right: 0; height: 2px; }
 .sf-rows-mark { display: none; }
 .sf-status .sf-st-row { position: relative; }
-[data-role='ctx'] { white-space: pre; overflow: hidden; box-shadow: inset 0 -1px 0 var(--l1); }
 [data-role='mid'] { position: absolute; left: 50%; transform: translateX(-50%); }
 [data-role='float'].sf-overlay > .sf-ov-card { width: auto; padding: 0; border-radius: 8px; margin-top: -4px; }
 [data-role='float'].sf-overlay > .sf-ov-card.nohead > .sf-ov-body { padding: 0; gap: 0; }
@@ -97,7 +96,6 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 	nvim.notify("nvim_exec_lua", vec![include_str!("status.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("float.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("telescope.lua").into(), Value::Array(vec![])])?;
-	nvim.notify("nvim_exec_lua", vec![include_str!("context.lua").into(), Value::Array(vec![])])?;
 	let mut grid = Grid::default();
 	let mut focused = false;
 	// The status colors sent in the `colors` sheet; nvim's colors only add up, so it only grows.
@@ -232,16 +230,9 @@ fn view(grid: &Grid) -> View {
 		crumbs.push(ui::span(" "));
 	}
 	let crumbs = ui::text(crumbs).key("crumbs").role("crumbs");
-	// The treesitter context, in the row above the grid: the enclosing line, with nvim's colors.
-	// ponytail: one line (the plugin's `max_lines`), so the row keeps the grid's height fixed.
-	let mut ctx: Vec<ui::Span> = grid.context.first().map_or_else(Vec::new, |line| line.iter().flat_map(|c| spans(&c.text, c.fg, c.bold)).collect());
-	if ctx.is_empty() {
-		ctx.push(ui::span(" "));
-	}
-	let ctx = ui::text(ctx).key("ctx").role("ctx");
 	// main is a region with Tern's block gap, which a program sheet can't reach; an inner col has
 	// no gap. `wrap` keeps a tall grid from virtualizing.
-	let grid_col = ui::col().gap(ui::Gap::None).wrap(true).child(tabs).child(crumbs).child(ctx).children(screen);
+	let grid_col = ui::col().gap(ui::Gap::None).wrap(true).child(tabs).child(crumbs).children(screen);
 	let view = View::new().main(ui::col().child(grid_col));
 	let menu = |p: &grid::Pum, id: &str| {
 		let items = p.items.iter().enumerate().map(|(i, [word, kind, menu, _])| {
@@ -454,9 +445,9 @@ fn kind_icon(kind: &str) -> &'static str {
 
 /// The screen surface's main is shorter than the pty: the cover inset (10px), the dock (24px of
 /// its own and the 24px status strip), main's padding (2 x 6px), the tab strip (28px) and the
-/// breadcrumb and context lines (2 x 16px), measured in `tern shot`.
+/// breadcrumb line (16px), measured in `tern shot`.
 // ponytail: fixed pixel overhead; a skin or Tern change that moves it clips or wastes a row.
-const CHROME_PX: u16 = 130;
+const CHROME_PX: u16 = 114;
 
 /// The grid size in cells that fits the screen surface, from the pty.
 fn winsize() -> (u16, u16) {
