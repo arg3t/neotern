@@ -1,0 +1,10 @@
+[package]
+name = "neotern"
+version = "0.1.0"
+edition = "2024"
+description = "Neovim as a native Tern surface: nvim --embed, drawn over the Tern Surface Protocol"
+
+[dependencies]
+libc = "0.2"
+rmpv = "1"
+tern-sdk = { git = "https://github.com/stencil-hq/tern-sdk" }
