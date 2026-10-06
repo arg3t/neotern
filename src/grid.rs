@@ -62,6 +62,8 @@ pub struct Grid {
 	pub doc:      Option<String>,
 	/// The Telescope picker while one is open, from `telescope.lua`.
 	pub pick:     Option<Pick>,
+	/// The lines nvim-treesitter-context shows, from `context.lua`.
+	pub context:  Vec<Vec<Chunk>>,
 	/// Each grid by id (`ext_multigrid`): grid 1 holds what is outside the windows (separators,
 	/// status lines), and each window has its own.
 	grids:   HashMap<u64, Cells>,
@@ -95,6 +97,7 @@ impl Default for Grid {
 			icons:    HashMap::new(),
 			doc:      None,
 			pick:     None,
+			context:  Vec::new(),
 			grids:    HashMap::new(),
 			wins:     HashMap::new(),
 			blank:    Cell::default(),
@@ -382,6 +385,23 @@ impl Grid {
 							first:   int(&a[8]).max(1),
 							at:      int(&a[9]),
 						});
+					},
+					// The lines treesitter-context shows; each is runs of `{ text, fg, bold }`.
+					"neotern_context" => {
+						let lines = a.first().and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+						self.context = lines
+							.iter()
+							.map(|line| {
+								let runs = line.as_array().map_or(&[][..], Vec::as_slice);
+								runs.iter()
+									.filter_map(|r| {
+										let [text, fg, bold] = r.as_array()?.as_slice() else { return None };
+										let fg = u32::try_from(int(fg)).ok();
+										Some(Chunk { side: 0, text: text.as_str()?.into(), fg, bold: bold.as_bool()? })
+									})
+									.collect()
+							})
+							.collect();
 					},
 					"neotern_status" => {
 						let runs = |v: &Value| -> Vec<Chunk> {
