@@ -7,7 +7,8 @@
 -- ponytail: polls every 100ms and sends on change; lualine itself refreshes on a timer too.
 local FILL = '⠀' -- U+2800: a fillchar no status line prints, so it marks the `%=` gaps.
 local DEFAULT = '%<%f %h%m%r%=%-14.(%l,%c%V%) %P'
-local last, barbecue
+local BAR = '%=' -- A 'statusline' that draws nothing, so the row between windows is a hairline.
+local last, barbecue, hidden
 
 local function send(ev)
   local ui = vim.api.nvim_list_uis()[1]
@@ -81,11 +82,40 @@ local function icons()
   return out
 end
 
+--- nvim still draws a status line row between windows stacked over each other, whatever
+--- 'laststatus' says. lualine would fill it with its own bar, so take lualine out of the window
+--- option (it still renders for us) and leave a hairline like the one between side-by-side windows.
+local function divider()
+  -- 'fillchars' is window-local with a global default: new windows take the global one, and a
+  -- window that was open before this ran takes it when it becomes the current one.
+  for _, scope in ipairs({ vim.opt_global, vim.opt_local }) do
+    if not scope.fillchars:get().stl then scope.fillchars:append({ stl = '─', stlnc = '─' }) end
+  end
+  -- An empty 'statusline' means nvim's default (the file name), and lualine's own value carries a
+  -- transparent highlight that hides the fill char. `%=` draws neither: the row is all fill.
+  if vim.go.statusline ~= BAR then vim.go.statusline = BAR end
+  -- The config or a colorscheme can set these back, so check on every tick.
+  if vim.api.nvim_get_hl(0, { name = 'StatusLine', link = false }).bg then
+    local fg = vim.api.nvim_get_hl(0, { name = 'WinSeparator', link = false }).fg
+    for _, group in ipairs({ 'StatusLine', 'StatusLineNC' }) do
+      vim.api.nvim_set_hl(0, group, { fg = fg, bg = 'NONE' })
+    end
+  end
+  if not hidden and package.loaded.lualine then
+    hidden = true
+    require('lualine').hide({ place = { 'statusline' } })
+  end
+end
+
 local function tick()
   if vim.o.laststatus ~= 0 then vim.o.laststatus = 0 end
+  divider()
   local win = vim.api.nvim_get_current_win()
-  local stl = vim.wo[win].statusline
-  local ev = { runs(stl ~= '' and stl or DEFAULT, win, false), runs(crumbs(win), win, true), icons() }
+  -- lualine renders on demand once it no longer writes 'statusline' itself.
+  local ok, lualine = pcall(require, 'lualine')
+  local stl = ok and lualine.statusline(true) or vim.wo[win].statusline
+  if stl == '' or stl == BAR then stl = DEFAULT end
+  local ev = { runs(stl, win, false), runs(crumbs(win), win, true), icons() }
   local key = vim.inspect(ev)
   if key ~= last then
     last = key

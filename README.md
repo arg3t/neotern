@@ -56,11 +56,15 @@ arguments and exits with its status.
   buffers while there is one tab page (like barbar). Each tab has its nvim-web-devicons icon. A
   click goes to that tab page or buffer.
 - Status line and breadcrumbs: after attach, neotern runs `src/status.lua`. Every 100 ms it
-  evaluates the current window's 'statusline' (for example lualine's) and barbecue.nvim's
-  breadcrumbs with `nvim_eval_statusline`, and sends the highlight runs when they change. The
-  status line goes to a Tern status strip at the bottom ('laststatus' is set to 0). The middle
-  part (after a first `%=`) is centered. The breadcrumbs go to one line under the tabs, and
+  renders the focused window's 'statusline' (`lualine.statusline(true)`, or the window's own) and
+  barbecue.nvim's breadcrumbs with `nvim_eval_statusline`, and sends the highlight runs when they
+  change. The status line goes to a Tern status strip at the bottom ('laststatus' is 0). The
+  middle part (after a first `%=`) is centered. The breadcrumbs go to one line under the tabs, and
   barbecue's own winbar is turned off. The colors are nvim's foreground colors.
+- Windows stacked over each other still get one status row from nvim, whatever 'laststatus' says.
+  So `src/status.lua` calls `lualine.hide`, sets 'statusline' to `%=` (which draws nothing), fills
+  it with `─` ('fillchars' `stl` and `stlnc`) and colors `StatusLine` like `WinSeparator`: the row
+  is a hairline, as between windows side by side.
 - Hover and signature help: after attach, neotern runs `src/float.lua`, which wraps
   `vim.lsp.util.open_floating_preview`. It hides the window nvim made and sends the text, so `K`,
   signature help and the diagnostic float show as a Tern markdown card under the cursor, with
@@ -98,7 +102,10 @@ arguments and exits with its status.
   window's status line shows. The breadcrumbs come only from barbecue.nvim, through its
   internals (`barbecue.ui.components`), and they are not shortened to fit. Two tabs with the
   same file name have the same label.
-- Mouse input and undercurl colors are not supported.
+- Mouse input is not forwarded: Tern reports a pointer only as an event of the node it hit
+  (`select`, `activate`, `action`), with no row or column, so `nvim_input_mouse` has nothing to
+  send. Clicks work on the parts Tern draws itself: the tabs, the completion rows and the picker
+  rows. Undercurl colors are not supported either.
 - Floats: a float keeps its own border cells inside Tern's card, so a bordered float shows both.
   A float does not blend with the text under it, and a float wider than the surface is clipped by
   Tern, not re-positioned. `src/blink.lua` hides blink's menu scrollbar, which is two 1-cell
