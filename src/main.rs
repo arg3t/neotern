@@ -36,6 +36,9 @@ const CMD_ID: &str = "layer.cmd.q";
 /// The node id of the tab strip, keyed `tabs` above the grid rows.
 const TABS_ID: &str = "main.0.tabs";
 
+/// The node id of the Telescope picker sheet, keyed `pick` in the layer region.
+const PICK_ID: &str = "layer.pick";
+
 /// The cmdline card takes the look of Tern's command palette (`.cmdk`): 640px wide, 16px
 /// corners, a flat 56px query row over a rule. The buffer menu is a compact 260px list with a
 /// 380px docs column at its right. ponytail: Tern's inner classes may change.
@@ -59,7 +62,10 @@ const PALETTE_CSS: &str = "
 [data-role='mid'] { position: absolute; left: 50%; transform: translateX(-50%); }
 [data-role='float'].sf-overlay > .sf-ov-card { width: auto; padding: 0; border-radius: 8px; margin-top: -4px; }
 [data-role='float'].sf-overlay > .sf-ov-card.nohead > .sf-ov-body { padding: 0; gap: 0; }
-[data-role='doc-float'] .sf-ov-body { max-height: 320px; overflow: auto; font-size: 12px; }
+[data-role='doc-float'].sf-overlay > .sf-ov-card.nohead > .sf-ov-body { max-height: 320px; overflow: auto; padding: 10px 14px; font-size: 12px; }
+[data-id='layer.pick'] .pk-main { min-width: 0; }
+[data-id='layer.pick'] .pk-pv { width: 56%; flex: none; }
+[data-id='layer.pick'] .pk-pv-slot { max-height: 100%; overflow: auto; }
 ";
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -89,6 +95,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 	nvim.notify("nvim_exec_lua", vec![include_str!("blink.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("status.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("float.lua").into(), Value::Array(vec![])])?;
+	nvim.notify("nvim_exec_lua", vec![include_str!("telescope.lua").into(), Value::Array(vec![])])?;
 	let mut grid = Grid::default();
 	let mut focused = false;
 	// The status colors sent in the `colors` sheet; nvim's colors only add up, so it only grows.
@@ -122,6 +129,19 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 					let set = if grid.pages { "nvim_set_current_tabpage" } else { "nvim_set_current_buf" };
 					nvim.notify(set, vec![handle.clone()])?;
 				}
+			},
+			// A click on a picker row: select that entry, and open it on a double-click.
+			Some(Input::Event(ev @ (Event::Select(_) | Event::Activate(_)))) if matches!(&ev, Event::Select(s) | Event::Activate(s) if s.id == PICK_ID) => {
+				let (Event::Select(s) | Event::Activate(s)) = &ev else { unreachable!() };
+				let row = grid.pick.as_ref().and_then(|p| p.rows.iter().position(|(id, _)| *id == s.item));
+				if let Some(i) = row {
+					let args = vec![(i as i64 + 1).into(), matches!(ev, Event::Activate(_)).into()];
+					nvim.notify("nvim_exec_lua", vec!["neotern_pick(...)".into(), Value::Array(args)])?;
+				}
+			},
+			// A click on the picker's backdrop or its `esc` button closes it, as Escape does.
+			Some(Input::Event(Event::Action(act))) if act.id == PICK_ID => {
+				nvim.notify("nvim_input", vec!["<Esc>".into()])?;
 			},
 			// A click on a menu row: select it (insert its word); a double-click also accepts it.
 			Some(Input::Event(ev @ (Event::Select(_) | Event::Activate(_)))) => {
@@ -251,6 +271,41 @@ fn view(grid: &Grid) -> View {
 	if let Some((md, at)) = grid.doc.as_deref().zip(doc_at) {
 		let body = ui::md(md).key("d");
 		layer = layer.child(ui::overlay().key("doc").role("doc-float").anchor(at).size(ui::OverlaySize::Md).child(body));
+	}
+	// Telescope as Tern's picker sheet: a search head, the entries, and the preview as code.
+	if let Some(p) = &grid.pick {
+		let items: Vec<ui::PickerItem> = p
+			.rows
+			.iter()
+			.map(|(id, text)| {
+				// A row's text starts with its devicon glyph, which Tern has no name for. `mono`
+				// splits what is left on the last `/`, so the directory dims and the name stands out.
+				let text = text.trim_start_matches(|c| matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..)).trim_start();
+				ui::PickerItem { mono: Some(true), ..ui::PickerItem::new(id.as_str(), text) }
+			})
+			.collect();
+		let order: Vec<ui::OrderEntry> = p.rows.iter().map(|(id, _)| ui::OrderEntry::Item(id.clone())).collect();
+		let mut sheet = ui::picker()
+			.key("pick")
+			.title(p.title.as_str())
+			.query(p.prompt.as_str())
+			.noun("results")
+			.items(items)
+			.order(order)
+			.total(p.total)
+			.preview(if p.pane { ui::PickerPreview::Side } else { ui::PickerPreview::None });
+		if let Some((id, _)) = p.sel.checked_sub(1).and_then(|i| p.rows.get(i)) {
+			sheet = sheet.selected(id.as_str());
+		}
+		if !p.preview.is_empty() {
+			// Line numbers from the buffer, and a mark on the line the previewer centred.
+			let mut code = ui::code(p.preview.as_str()).key("pv").lang(p.ft.as_str()).numbers(true).start(p.first);
+			if p.at > 0 {
+				code = code.marks(vec![ui::CodeMark { line: p.at as u64, tone: Some(ui::Tone::Accent), ranges: Vec::new() }]);
+			}
+			sheet = sheet.child(code);
+		}
+		layer = layer.child(sheet);
 	}
 	if let Some(at) = pum_at {
 		let p = pum.unwrap();

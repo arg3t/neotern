@@ -60,6 +60,8 @@ pub struct Grid {
 	pub icons:    HashMap<String, (String, Option<u32>)>,
 	/// The hover or signature help text, from `float.lua`.
 	pub doc:      Option<String>,
+	/// The Telescope picker while one is open, from `telescope.lua`.
+	pub pick:     Option<Pick>,
 	/// Each grid by id (`ext_multigrid`): grid 1 holds what is outside the windows (separators,
 	/// status lines), and each window has its own.
 	grids:   HashMap<u64, Cells>,
@@ -92,6 +94,7 @@ impl Default for Grid {
 			crumbs:   Vec::new(),
 			icons:    HashMap::new(),
 			doc:      None,
+			pick:     None,
 			grids:    HashMap::new(),
 			wins:     HashMap::new(),
 			blank:    Cell::default(),
@@ -174,6 +177,27 @@ pub struct Win {
 	pub h:     usize,
 	/// A float's drawing order (`compindex`); `None` for a split, which the screen holds.
 	pub float: Option<i64>,
+}
+
+/// A Telescope picker (`:h telescope`), from `telescope.lua`.
+pub struct Pick {
+	pub title:   String,
+	/// The text typed in the prompt.
+	pub prompt:  String,
+	/// The visible entries in order, each its id (the sorted-on text) and its display text.
+	pub rows:    Vec<(String, String)>,
+	/// The selected row, 1-based; 0 when there is none.
+	pub sel:     usize,
+	/// The previewed text and its filetype.
+	pub preview: String,
+	pub ft:      String,
+	/// How many entries the finder looked at.
+	pub total:   u64,
+	/// Whether the picker has a previewer at all, so the pane stays while its text loads.
+	pub pane:    bool,
+	/// The buffer line `preview` starts at, and the line the previewer put the match on.
+	pub first:   i64,
+	pub at:      i64,
 }
 
 /// The cursor shape of a mode (`:h guicursor`).
@@ -340,6 +364,23 @@ impl Grid {
 								"markdown" | "" => text.to_owned(),
 								syntax => format!("```{syntax}\n{text}\n```"),
 							}
+						});
+					},
+					"neotern_picker" => {
+						self.pick = (a.len() >= 10).then(|| Pick {
+							title:   a[0].as_str().unwrap_or_default().into(),
+							prompt:  a[1].as_str().unwrap_or_default().into(),
+							rows:    a[2].as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|r| {
+								let [id, text] = r.as_array()?.as_slice() else { return None };
+								Some((id.as_str()?.to_owned(), text.as_str()?.to_owned()))
+							}).collect(),
+							sel:     int(&a[3]).max(0) as usize,
+							preview: a[4].as_str().unwrap_or_default().into(),
+							ft:      a[5].as_str().unwrap_or_default().into(),
+							total:   int(&a[6]).max(0) as u64,
+							pane:    a[7].as_bool().unwrap_or(false),
+							first:   int(&a[8]).max(1),
+							at:      int(&a[9]),
 						});
 					},
 					"neotern_status" => {

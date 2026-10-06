@@ -65,6 +65,14 @@ arguments and exits with its status.
   `vim.lsp.util.open_floating_preview`. It hides the window nvim made and sends the text, so `K`,
   signature help and the diagnostic float show as a Tern markdown card under the cursor, with
   highlighted code blocks. The buffer and window stay, so nvim's own close events still work.
+- Telescope: after attach, neotern runs `src/telescope.lua`. It hides Telescope's prompt, results
+  and preview windows (a hidden window stays valid, so Telescope keeps filling their buffers) and
+  sends the state on each update: the title, the prompt, the entries, the selection and the
+  preview. Tern draws it as a `picker` sheet with a search head, rows (the directory dims) and a
+  preview pane of highlighted code with line numbers and a mark on the matched line. A click
+  selects a row and a double click opens it. It also sets `sorting_strategy = 'ascending'`, so the
+  best match is the first row and `<Down>` walks down, and `preview_cutoff = 0`, because the sheet
+  always has room.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
