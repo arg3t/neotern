@@ -1,7 +1,8 @@
 -- neotern runs this once after attach. It sends, as one `neotern_status` redraw:
 -- 1. the current window's 'statusline' (lualine's, or any); nvim's own is off ('laststatus' 0);
 -- 2. barbecue.nvim's breadcrumbs of the current window; barbecue's winbar is off;
--- 3. the nvim-web-devicons icon of each buffer's file name, for the tabs: `{ name, glyph, fg }`.
+-- 3. the nvim-web-devicons icon of each buffer's file name, for the tabs: `{ name, glyph, fg }`;
+-- 4. the `Visual` background, which Tern paints behind every cell that carries a background.
 -- 1 and 2 are highlight runs `{ side, text, fg, bold }`: side 0 is left, 1 the middle (after a
 -- first `%=`), 2 right (after the last `%=`).
 -- ponytail: polls every 100ms and sends on change; lualine itself refreshes on a timer too.
@@ -115,7 +116,8 @@ local function tick()
   local ok, lualine = pcall(require, 'lualine')
   local stl = ok and lualine.statusline(true) or vim.wo[win].statusline
   if stl == '' or stl == BAR then stl = DEFAULT end
-  local ev = { runs(stl, win, false), runs(crumbs(win), win, true), icons() }
+  local sel = vim.api.nvim_get_hl(0, { name = 'Visual', link = false }).bg or -1
+  local ev = { runs(stl, win, false), runs(crumbs(win), win, true), icons(), sel }
   local key = vim.inspect(ev)
   if key ~= last then
     last = key

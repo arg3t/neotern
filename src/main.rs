@@ -6,6 +6,7 @@ mod nvim;
 
 use std::{
 	collections::BTreeSet,
+	fmt::Write as _,
 	env,
 	error::Error,
 	process::{Command, ExitCode},
@@ -66,6 +67,14 @@ const PALETTE_CSS: &str = "
 [data-id='layer.pick'] .pk-main { min-width: 0; }
 [data-id='layer.pick'] .pk-pv { width: 56%; flex: none; }
 [data-id='layer.pick'] .pk-pv-slot { max-height: 100%; overflow: auto; }
+[data-role^='w'].sf-editor { position: absolute; padding: 0; background: none; border-radius: 0; box-shadow: inset -1px 0 0 var(--l1); }
+[data-role^='w'].sf-editor .sf-ed-scroll { overflow: hidden; }
+.sf-editor .sf-caret { display: none; }
+[data-role='screen-v'] .sf-editor.focused .sf-caret { display: inline-block; }
+[data-role^='w'] .sf-t-mark { background: var(--nt-sel, var(--l2)); color: inherit; border-radius: 0; }
+[data-role^='w'] .sf-t-code { background: var(--tv-cur, var(--accent)); color: var(--page); border: 0; box-shadow: none; border-radius: 0; padding: 0; font: inherit; }
+[data-role='float-text'] { padding: 0; background: none; box-shadow: none; }
+[data-role='float-text'] .sf-caret { display: none; }
 ";
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -96,10 +105,16 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 	nvim.notify("nvim_exec_lua", vec![include_str!("status.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("float.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("telescope.lua").into(), Value::Array(vec![])])?;
+	nvim.notify("nvim_exec_lua", vec![include_str!("keys.lua").into(), Value::Array(vec![])])?;
 	let mut grid = Grid::default();
-	let mut focused = false;
+	// The field Tern's caret sits in, the cell box Tern draws with, and the sheet that places the
+	// window boxes. The CSS engine has no `ch` unit, so the boxes are pixels of that cell.
+	let mut focus: Option<String> = None;
+	let mut cell = (8.0, 16.0);
+	let mut layout = String::new();
 	// The status colors sent in the `colors` sheet; nvim's colors only add up, so it only grows.
 	let mut colors = BTreeSet::new();
+	let mut sel = None;
 	'run: loop {
 		match session.next(Some(POLL))? {
 			Some(Input::Key(key)) if key.name == "paste" => {
@@ -121,6 +136,28 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 					let args = vec![cmd.text.as_str().into(), (cmd.pos + 1).into()];
 					nvim.notify("nvim_call_function", vec!["setcmdline".into(), Value::Array(args)])?;
 					session.render(sf, view(&grid))?;
+				}
+			},
+			// Tern's own cell size: the window boxes are multiples of it.
+			Some(Input::Event(Event::Resize(r))) => {
+				if let Some(c) = r.cell.filter(|c| c.w > 0.0 && c.h > 0.0) {
+					(cell, layout) = ((c.w, c.h), String::new());
+				}
+			},
+			// A click in a window: nvim maps the cell to a buffer position, folds and all.
+			Some(Input::Event(Event::Edit(ed))) if ed.from == ed.to && ed.text.is_empty() => {
+				if let Some((g, _)) = grid.splits().into_iter().find(|(g, _)| win_id(*g) == ed.id) {
+					let (row, col) = grid.at_offset(g, ed.cursor);
+					for action in ["press", "release"] {
+						let args = vec!["left".into(), action.into(), "".into(), (g as i64).into(), (row as i64).into(), (col as i64).into()];
+						nvim.notify("nvim_input_mouse", args)?;
+					}
+				}
+			},
+			// A click in a window that is not the current one asks for the keys.
+			Some(Input::Event(Event::Focus(f))) => {
+				if let Some((_, win)) = grid.splits().into_iter().find(|(g, _)| win_id(*g) == f.id) {
+					nvim.notify("nvim_set_current_win", vec![win.handle.clone()])?;
 				}
 			},
 			// A click on a tab: go to that tab page or buffer.
@@ -169,13 +206,29 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 						let n = colors.len();
 						let icons = grid.icons.values().filter_map(|(_, fg)| *fg);
 						colors.extend(grid.status.iter().chain(&grid.crumbs).filter_map(|c| c.fg).chain(icons));
-						if colors.len() != n {
-							session.stylesheet(sf, "colors", Some(&colors_css(&colors)))?;
+						colors.extend(grid.palette().into_iter().chain(grid.sel));
+						if colors.len() != n || sel != grid.sel {
+							sel = grid.sel;
+							session.stylesheet(sf, "colors", Some(&colors_css(&colors, grid.sel)))?;
+						}
+						// The window boxes move only when nvim lays the screen out again.
+						let splits = grid.splits();
+						let css = screen_css(&splits, grid.h, cell);
+						if css != layout {
+							layout = css;
+							session.stylesheet(sf, "layout", Some(&layout))?;
 						}
 						session.render(sf, view(&grid))?;
-						if grid.cmd.is_some() != focused {
-							focused = !focused;
-							session.focus(sf, focused.then_some(CMD_ID))?;
+						// The caret is the cmdline's while one is open, else the window's that nvim
+						// has: Tern blinks it there and sends that field's clicks.
+						let cur = win_id(grid.caret().0);
+						let want = match grid.cmd.is_some() {
+							true => Some(CMD_ID.to_owned()),
+							false => splits.iter().any(|(g, _)| win_id(*g) == cur).then_some(cur),
+						};
+						if want != focus {
+							focus = want;
+							session.focus(sf, focus.as_deref())?;
 						}
 					}
 				},
@@ -190,26 +243,33 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
 fn view(grid: &Grid) -> View {
 	let pum = grid.pum.as_ref();
-	// A card hangs below a cell of the screen, whose row splits at that column so the card's left
-	// edge lines up with it: the buffer menu under the completed word, a float at its own cell.
-	let mut anchors: Vec<(usize, usize)> = Vec::new();
-	let mut anchor = |row: usize, col: usize| -> ui::Anchor {
-		let (above, row) = (row == 0, row.saturating_sub(1));
-		let col = col.min(grid.w.saturating_sub(1));
-		anchors.push((row, col));
-		ui::Anchor::Node { id: format!("main.0.{row}.{col}"), above }
+	let splits = grid.splits();
+	// Every window is a Tern `editor` of its grid's text: a real caret, native selection and a
+	// click that lands on a character. `screen_css` puts each one at its cell position.
+	let (cg, cr, cc) = grid.caret();
+	let shape = match grid.shape() {
+		Some(Shape::Vertical) => "screen-v",
+		Some(Shape::Horizontal) => "screen-h",
+		_ => "screen-block",
 	};
-	let pum_at = pum.filter(|p| !p.cmdline).map(|p| {
-		let (row, col) = grid.to_screen(p.grid, p.row, p.col);
-		anchor(row + 1, col)
-	});
-	let floats: Vec<(u64, grid::Win, ui::Anchor)> = grid.floats().into_iter().map(|(g, w)| (g, w, anchor(w.row, w.col))).collect();
-	// Hover and signature help sit under the cursor's cell, as nvim's own float does.
-	let doc_at = grid.doc.as_ref().map(|_| {
-		let (_, row, col) = grid.cursor();
-		anchor(row + 1, col)
-	});
-	let screen = cells(grid, 1, grid.w, grid.h, &anchors);
+	// A block or underline cursor is a mark over the cell, as nvim draws it; an insert bar is
+	// Tern's own caret, which sits between two characters.
+	let block = grid.shape() != Some(Shape::Vertical);
+	let windows: Vec<ui::Node> = splits
+		.iter()
+		.map(|(g, win)| {
+			let cursor = (*g == cg).then(|| (grid.offset(*g, cr, cc), grid.offset(*g, cr, cc + 1)));
+			editor(grid, *g, win.h, cursor, block, &format!("w{g}")).into()
+		})
+		.collect();
+	// A card hangs under the caret of the focused window; a float of its own goes there too, as
+	// most of them (hover, a plugin menu) open at the cursor.
+	let caret = splits.iter().find(|(g, _)| *g == cg).map(|(g, _)| ui::Anchor::Caret(win_id(*g)));
+	let at = |fallback: ui::Anchor| caret.clone().unwrap_or(fallback);
+	let pum_at = pum.filter(|p| !p.cmdline).map(|_| at(ui::Anchor::Center));
+	let floats: Vec<(u64, grid::Win, ui::Anchor)> =
+		grid.floats().into_iter().map(|(g, w)| (g, w, at(ui::Anchor::Center))).collect();
+	let doc_at = grid.doc.as_ref().map(|_| at(ui::Anchor::Center));
 	// The tab pages, or the buffers while there is one tab page (like barbar), with devicons.
 	let mut tabs = ui::tabs().key("tabs");
 	for (i, (_, name)) in grid.tabs.iter().enumerate() {
@@ -231,8 +291,9 @@ fn view(grid: &Grid) -> View {
 	}
 	let crumbs = ui::text(crumbs).key("crumbs").role("crumbs");
 	// main is a region with Tern's block gap, which a program sheet can't reach; an inner col has
-	// no gap. `wrap` keeps a tall grid from virtualizing.
-	let grid_col = ui::col().gap(ui::Gap::None).wrap(true).child(tabs).child(crumbs).children(screen);
+	// no gap. The windows sit in a `screen` box that `screen_css` sizes and positions.
+	let screen = ui::col().key("screen").role(shape).gap(ui::Gap::None).children(windows);
+	let grid_col = ui::col().gap(ui::Gap::None).wrap(true).child(tabs).child(crumbs).child(screen);
 	let view = View::new().main(ui::col().child(grid_col));
 	let menu = |p: &grid::Pum, id: &str| {
 		let items = p.items.iter().enumerate().map(|(i, [word, kind, menu, _])| {
@@ -261,16 +322,26 @@ fn view(grid: &Grid) -> View {
 		}
 		layer = layer.child(card);
 	}
-	// A float (hover, signature help, Telescope) is a card over the cell nvim placed it at. Its
-	// rows carry no width of their own, so the body asks for the grid's size in cells.
+	// A float (a plugin menu, a border) is the same editor in a card over the caret.
 	for (g, win, at) in floats {
 		let size = ui::Bound::wh(ui::Extent::Ch(win.w as f64), ui::Extent::Lines(win.h as f64));
-		let body = ui::col().key("c").gap(ui::Gap::None).min(size).children(cells(grid, g, win.w, win.h, &[]));
+		let body = editor(grid, g, win.h, None, false, "float-text").min(size);
 		layer = layer.child(ui::overlay().key(g).role("float").anchor(at).size(ui::OverlaySize::Sm).child(body));
 	}
 	if let Some((md, at)) = grid.doc.as_deref().zip(doc_at) {
 		let body = ui::md(md).key("d");
 		layer = layer.child(ui::overlay().key("doc").role("doc-float").anchor(at).size(ui::OverlaySize::Md).child(body));
+	}
+	// which-key as a card at the bottom: a row per key that can follow, with its keycap.
+	if let Some((title, rows)) = &grid.keys {
+		let items = rows.iter().enumerate().map(|(i, (key, desc, group))| {
+			let item = ui::item(desc.as_str()).key(i).hint(vec![key.clone()]);
+			if *group { item.icon("folder") } else { item }
+		});
+		let list = ui::list().key("l").max_lines(14).children(items);
+		let head = if title.is_empty() { "Keys".to_owned() } else { format!("Keys after {title}") };
+		let card = ui::overlay().key("keys").role("keys").anchor(ui::Anchor::Bottom).size(ui::OverlaySize::Lg).head(head).child(list);
+		layer = layer.child(card);
 	}
 	// Telescope as Tern's picker sheet: a search head, the entries, and the preview as code.
 	if let Some(p) = &grid.pick {
@@ -337,40 +408,62 @@ fn view(grid: &Grid) -> View {
 	view.layer(layer).dock(ui::col().child(status))
 }
 
-/// Grid `src` as one node per row: one row node, or a row of parts when it is cut. A row splits
-/// at a bar cursor and at each anchor of `anchors` (`(row, col)`), whose part a card anchors to.
-/// A part's key is its first column, so its id is `<row id>.<col>`.
-fn cells(grid: &Grid, src: u64, w: usize, h: usize, anchors: &[(usize, usize)]) -> Vec<ui::Node> {
-	let (cg, cr, cc) = grid.cursor();
-	let bar = grid.shape().filter(|s| *s != Shape::Block && cg == src && cc < w);
-	(0..h)
-		.map(|r| -> ui::Node {
-			let mut cuts = vec![0, w];
-			let at = anchors.iter().filter(|(row, _)| *row == r);
-			cuts.extend(at.map(|(_, col)| *col));
-			let anchored = cuts.len() > 2;
-			if bar.is_some() && cr == r {
-				cuts.extend([cc, (cc + 1 + grid.wide(src, r, cc) as usize).min(w)]);
-			}
-			cuts.sort_unstable();
-			cuts.dedup();
-			if cuts.len() == 2 && !anchored {
-				// `rows` clips, while `ansi` wraps a row that fills its width into a second line.
-				return ui::rows(vec![grid.row(src, r, 0..w)]).cols(w as u32).key(r).into();
-			}
-			// A row gives its parts no width of their own; grow in proportion to the cells keeps
-			// every column where it was. `rows` clips instead of wrapping.
-			let parts = cuts.windows(2).map(|p| {
-				let (from, to) = (p[0], p[1]);
-				let part = ui::rows(vec![grid.row(src, r, from..to)]).cols((to - from) as u32).grow((to - from) as f64).key(from);
-				match bar {
-					Some(shape) if r == cr && from == cc => part.role(if shape == Shape::Vertical { "cur-v" } else { "cur-h" }),
-					_ => part,
-				}
-			});
-			ui::row().gap(ui::Gap::None).key(r).children(parts).into()
-		})
-		.collect()
+/// Grid `g` as a Tern `editor`: the cells' text, one decoration per colored run, and the caret
+/// at `caret` when nvim's cursor is in it. nvim owns the wrapping and the scrolling, so the text
+/// is exactly what the window shows and the node never wraps or follows the caret.
+fn editor(grid: &Grid, g: u64, h: usize, cursor: Option<(usize, usize)>, block: bool, role: &str) -> ui::Editor {
+	let (text, runs) = grid.text(g);
+	let mut decor = runs
+		.iter()
+		.map(|r| ui::Decor { from: r.from, to: r.to, s: token(r.fg, r.bold, r.italic, r.marked), fx: None })
+		.collect::<Vec<_>>();
+	if let Some((from, to)) = cursor.filter(|_| block) {
+		// `code` is a token with a background of its own, restyled as nvim's block cursor.
+		decor.push(ui::Decor { from, to: to.max(from + 1), s: "code".into(), fx: None });
+	}
+	ui::editor()
+		.key(format!("w{g}"))
+		.role(role)
+		.text(text)
+		.decor(decor)
+		.max_lines(h as u32)
+		.cursor(cursor.map_or(0, |(from, _)| from))
+		.prop("nowrap", true)
+		.prop("followCursor", false)
+}
+
+/// The node id of the editor of grid `g`.
+fn win_id(g: u64) -> String {
+	format!("main.0.screen.w{g}")
+}
+
+/// The span tokens of a cell run: its color names a `--sf-p-` variable `colors_css` defines.
+fn token(fg: u32, bold: bool, italic: bool, marked: bool) -> String {
+	let mut s = format!("c{fg:06x} mono");
+	if bold {
+		s += " strong";
+	}
+	if italic {
+		s += " em";
+	}
+	if marked {
+		s += " mark";
+	}
+	s
+}
+
+/// The sheet that puts each window at its cell position: nvim lays the screen out, Tern draws it.
+/// `ch` is the cell width and `--sf-lh` the line height, so the boxes land on nvim's grid.
+fn screen_css(splits: &[(u64, grid::Win)], rows: usize, cell: (f64, f64)) -> String {
+	let (cw, ch) = cell;
+	let _ = cw;
+	let mut css = format!("[data-role^='screen'] {{ position: relative; height: {}px; }}\n", rows as f64 * ch);
+	for (g, win) in splits {
+		let (left, top) = (win.col as f64 * cw, win.row as f64 * ch);
+		let (w, h) = (win.w as f64 * cw, win.h as f64 * ch);
+		let _ = writeln!(css, "[data-role='w{g}'] {{ left: {left}px; top: {top}px; width: {w}px; height: {h}px; }}");
+	}
+	css
 }
 
 /// nvim text as spans: its color is the token `c<rrggbb>`, which `colors_css` defines; Nerd Font
@@ -395,9 +488,12 @@ fn spans(text: &str, fg: Option<u32>, bold: bool) -> Vec<ui::Span> {
 
 /// The sheet that gives each color token its color: `--sf-p-<token>` is the color Tern puts on a
 /// span with an unknown token.
-fn colors_css(colors: &BTreeSet<u32>) -> String {
-	let vars: String = colors.iter().map(|c| format!("--sf-p-c{c:06x}: #{c:06x}; ")).collect();
-	format!(".sf-status, .sf-tabs, [data-role='crumbs'] {{ {vars}}}")
+fn colors_css(colors: &BTreeSet<u32>, sel: Option<u32>) -> String {
+	let mut vars: String = colors.iter().map(|c| format!("--sf-p-c{c:06x}: #{c:06x}; ")).collect();
+	if let Some(sel) = sel {
+		let _ = write!(vars, "--nt-sel: #{sel:06x}; ");
+	}
+	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor {{ {vars}}}")
 }
 
 /// A message: one line is a toast, more is a card at the bottom that stays until a key.
@@ -443,11 +539,12 @@ fn kind_icon(kind: &str) -> &'static str {
 	}
 }
 
-/// The screen surface's main is shorter than the pty: the cover inset (10px), the dock (24px of
-/// its own and the 24px status strip), main's padding (2 x 6px), the tab strip (28px) and the
-/// breadcrumb line (16px), measured in `tern shot`.
+/// The screen surface's main is smaller than the pty: Tern's own pane chrome and main's padding
+/// take both sides, and the tab strip (28px) and the breadcrumb line (16px) the height. Measured
+/// in `tern shot`: main was 871 x 580 px where the pty gave 896 x 624 px.
 // ponytail: fixed pixel overhead; a skin or Tern change that moves it clips or wastes a row.
-const CHROME_PX: u16 = 114;
+const CHROME_PX: u16 = 88;
+const CHROME_W: u16 = 28;
 
 /// The grid size in cells that fits the screen surface, from the pty.
 fn winsize() -> (u16, u16) {
@@ -459,7 +556,9 @@ fn winsize() -> (u16, u16) {
 		return (80, 24);
 	}
 	let cell_h = if ws.ws_ypixel > 0 { (ws.ws_ypixel / ws.ws_row).max(1) } else { 16 };
-	(ws.ws_col, ws.ws_row.saturating_sub(CHROME_PX.div_ceil(cell_h)).max(1))
+	let cell_w = if ws.ws_xpixel > 0 { (ws.ws_xpixel / ws.ws_col).max(1) } else { 8 };
+	let cols = ws.ws_col.saturating_sub(CHROME_W.div_ceil(cell_w)).max(20);
+	(cols, ws.ws_row.saturating_sub(CHROME_PX.div_ceil(cell_h)).max(1))
 }
 
 /// A Tern key in `nvim_input` notation (`:h key-notation`).

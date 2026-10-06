@@ -2,8 +2,6 @@
 
 use std::{
 	collections::HashMap,
-	fmt::Write,
-	ops::Range,
 	time::{Duration, Instant},
 };
 
@@ -58,10 +56,15 @@ pub struct Grid {
 	pub crumbs:   Vec<Chunk>,
 	/// The devicon glyph and color per file name (tail), from `status.lua`.
 	pub icons:    HashMap<String, (String, Option<u32>)>,
+	/// nvim's `Visual` background, for the cells a window marks.
+	pub sel:      Option<u32>,
 	/// The hover or signature help text, from `float.lua`.
 	pub doc:      Option<String>,
 	/// The Telescope picker while one is open, from `telescope.lua`.
 	pub pick:     Option<Pick>,
+	/// which-key's follow-up keys while it shows, from `keys.lua`: the keys pressed so far, then
+	/// `(key, description, is a group)` per row.
+	pub keys:     Option<(String, Vec<(String, String, bool)>)>,
 	/// Each grid by id (`ext_multigrid`): grid 1 holds what is outside the windows (separators,
 	/// status lines), and each window has its own.
 	grids:   HashMap<u64, Cells>,
@@ -93,8 +96,10 @@ impl Default for Grid {
 			status:   Vec::new(),
 			crumbs:   Vec::new(),
 			icons:    HashMap::new(),
+			sel:      None,
 			doc:      None,
 			pick:     None,
+			keys:     None,
 			grids:    HashMap::new(),
 			wins:     HashMap::new(),
 			blank:    Cell::default(),
@@ -169,14 +174,27 @@ impl Cells {
 }
 
 /// Where a shown window sits on the screen.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Win {
-	pub row:   usize,
-	pub col:   usize,
-	pub w:     usize,
-	pub h:     usize,
+	pub row:    usize,
+	pub col:    usize,
+	pub w:      usize,
+	pub h:      usize,
 	/// A float's drawing order (`compindex`); `None` for a split, which the screen holds.
-	pub float: Option<i64>,
+	pub float:  Option<i64>,
+	/// nvim's window handle, for `nvim_set_current_win`.
+	pub handle: Value,
+}
+
+/// One colored run of a window's text, in the offsets Tern counts (UTF-16 units).
+pub struct Run {
+	pub from:   usize,
+	pub to:     usize,
+	pub fg:     u32,
+	pub bold:   bool,
+	pub italic: bool,
+	/// The cells carry a background of their own (a selection, a match, a diff).
+	pub marked: bool,
 }
 
 /// A Telescope picker (`:h telescope`), from `telescope.lua`.
@@ -244,10 +262,6 @@ pub struct Pum {
 	/// `(word, kind, menu, info)` per item.
 	pub items:    Vec<[String; 4]>,
 	pub selected: Option<usize>,
-	/// Where the menu starts: grid `grid` (grid 1 for blink's), at `row`, `col`.
-	pub grid:     u64,
-	pub row:      usize,
-	pub col:      usize,
 	/// Completes the cmdline (grid -1), not the buffer.
 	pub cmdline:  bool,
 }
@@ -331,9 +345,6 @@ impl Grid {
 						self.pum = Some(Pum {
 							items:    items.iter().map(|it| std::array::from_fn(|i| text(it, i))).collect(),
 							selected: usize::try_from(int(&a[1])).ok(),
-							grid:     int(&a[4]).max(0) as u64,
-							row:      int(&a[2]) as usize,
-							col:      int(&a[3]) as usize,
 							cmdline:  int(&a[4]) == -1,
 						});
 					},
@@ -383,6 +394,19 @@ impl Grid {
 							at:      int(&a[9]),
 						});
 					},
+					"neotern_keys" => {
+						self.keys = (a.len() >= 2).then(|| {
+							let rows = a[1].as_array().map_or(&[][..], Vec::as_slice);
+							let rows = rows
+								.iter()
+								.filter_map(|r| {
+									let [key, desc, group] = r.as_array()?.as_slice() else { return None };
+									Some((key.as_str()?.into(), desc.as_str()?.into(), group.as_bool()?))
+								})
+								.collect();
+							(a[0].as_str().unwrap_or_default().to_owned(), rows)
+						});
+					},
 					"neotern_status" => {
 						let runs = |v: &Value| -> Vec<Chunk> {
 							let runs = v.as_array().map_or(&[][..], Vec::as_slice);
@@ -399,6 +423,7 @@ impl Grid {
 							let [name, glyph, fg] = i.as_array()?.as_slice() else { return None };
 							Some((name.as_str()?.into(), (glyph.as_str()?.into(), u32::try_from(int(fg)).ok())))
 						}).collect();
+						self.sel = a.get(3).map(|v| int(v)).and_then(|c| u32::try_from(c).ok());
 					},
 					"mode_info_set" => {
 						let on = a[0].as_bool().unwrap_or(false);
@@ -459,12 +484,14 @@ impl Grid {
 					},
 					"win_pos" => {
 						let n = |i: usize| int(&a[i]) as usize;
-						self.wins.insert(int(&a[0]) as u64, Win { row: n(2), col: n(3), w: n(4), h: n(5), float: None });
+						let win = Win { row: n(2), col: n(3), w: n(4), h: n(5), float: None, handle: a[1].clone() };
+						self.wins.insert(int(&a[0]) as u64, win);
 					},
 					// nvim places the float (`screen_row`, `screen_col`); its size is its grid's.
 					"win_float_pos" => {
 						let at = |i: usize| a[i].as_f64().or_else(|| a[i].as_i64().map(|v| v as f64)).unwrap_or(0.0).max(0.0) as usize;
-						self.wins.insert(int(&a[0]) as u64, Win { row: at(9), col: at(10), w: 0, h: 0, float: Some(int(&a[8])) });
+						let win = Win { row: at(9), col: at(10), w: 0, h: 0, float: Some(int(&a[8])), handle: a[1].clone() };
+						self.wins.insert(int(&a[0]) as u64, win);
 					},
 					"win_hide" | "win_close" => _ = self.wins.remove(&(int(&a[0]) as u64)),
 					"default_colors_set" => {
@@ -538,84 +565,116 @@ impl Grid {
 		self.cmd.is_none().then(|| self.shapes.get(self.mode).copied().unwrap_or(Shape::Block))
 	}
 
-	/// The cursor as the view draws it: `(1, row, col)` on the screen, or `(grid, row, col)` in
-	/// a float.
-	pub fn cursor(&self) -> (u64, usize, usize) {
-		let (g, r, c) = self.cursor;
-		match self.wins.get(&g) {
-			Some(w) if w.float.is_none() => (1, w.row + r, w.col + c),
-			Some(_) => (g, r, c),
-			None => (1, r, c),
-		}
-	}
-
-	/// The screen position of `(r, c)` in grid `g`.
-	pub fn to_screen(&self, g: u64, r: usize, c: usize) -> (usize, usize) {
-		self.wins.get(&g).map_or((r, c), |w| (w.row + r, w.col + c))
-	}
-
 	/// The shown floats in drawing order, each with its grid's size.
 	pub fn floats(&self) -> Vec<(u64, Win)> {
 		let mut floats: Vec<(u64, Win)> = self
 			.wins
 			.iter()
 			.filter(|(_, w)| w.float.is_some())
-			.filter_map(|(g, w)| self.grids.get(g).map(|cells| (*g, Win { w: cells.w, h: cells.h, ..*w })))
+			.filter_map(|(g, w)| self.grids.get(g).map(|cells| (*g, Win { w: cells.w, h: cells.h, ..w.clone() })))
 			.collect();
 		floats.sort_by_key(|(_, w)| w.float);
 		floats
 	}
 
-	/// The cell at `(r, c)` of `src`: 1 is the screen (each split's grid over grid 1), another id a
-	/// float's grid.
-	fn cell(&self, src: u64, r: usize, c: usize) -> &Cell {
-		let split = (src == 1).then(|| {
-			self.wins.iter().find(|(_, w)| w.float.is_none() && (w.row..w.row + w.h).contains(&r) && (w.col..w.col + w.w).contains(&c))
-		});
-		let (g, r, c) = match split.flatten() {
-			Some((g, w)) => (*g, r - w.row, c - w.col),
-			None => (src, r, c),
-		};
-		self.grids.get(&g).and_then(|cells| cells.get(r, c)).unwrap_or(&self.blank)
+	/// The split windows, each with its grid's size, in a stable order (by grid id).
+	pub fn splits(&self) -> Vec<(u64, Win)> {
+		let mut wins: Vec<(u64, Win)> = self
+			.wins
+			.iter()
+			.filter(|(_, w)| w.float.is_none())
+			.filter_map(|(g, w)| self.grids.get(g).map(|c| (*g, Win { w: w.w.min(c.w), h: w.h.min(c.h), ..w.clone() })))
+			.collect();
+		wins.sort_unstable_by_key(|(g, _)| *g);
+		wins
 	}
 
-	/// Whether the cell at `(r, c)` of `src` is the left half of a double-width char.
-	pub fn wide(&self, src: u64, r: usize, c: usize) -> bool {
-		self.cell(src, r, c + 1).text.is_empty()
-	}
-
-	/// Columns `cols` of row `r` as text with truecolor SGR; a block cursor's cell is drawn
-	/// reversed. The view draws bar cursors.
-	pub fn row(&self, src: u64, r: usize, cols: Range<usize>) -> String {
-		let mut out = String::new();
-		let mut last = None;
-		let cursor = self.cursor();
-		for c in cols {
-			let cell = self.cell(src, r, c);
-			// The right half of a double-width char is "".
-			if cell.text.is_empty() {
-				continue;
+	/// The text of grid `g` for Tern's editor, with one colored run per cell run and the offsets
+	/// Tern counts (UTF-16 units over the whole text). A run whose cells carry a background of
+	/// their own is marked: nvim's selection, search matches and diffs show as a highlight.
+	pub fn text(&self, g: u64) -> (String, Vec<Run>) {
+		let Some(cells) = self.grids.get(&g) else { return (String::new(), Vec::new()) };
+		let (mut text, mut runs) = (String::new(), Vec::<Run>::new());
+		let mut at = 0;
+		for r in 0..cells.h {
+			if r > 0 {
+				text.push('\n');
+				at += 1;
 			}
-			let attr = self.hl.get(&cell.hl).copied().unwrap_or_default();
-			let (mut fg, mut bg) = (attr.fg.unwrap_or(self.fg), attr.bg.unwrap_or(self.bg));
-			// The cmdline has Tern's caret, so the grid's cursor hides while it shows.
-			if attr.reverse != (self.shape() == Some(Shape::Block) && (src, r, c) == cursor) {
-				(fg, bg) = (bg, fg);
-			}
-			let key = (fg, bg, attr.bold, attr.italic, attr.underline, attr.strike);
-			if last != Some(key) {
-				let _ = write!(out, "\x1b[0;38;2;{};{};{};48;2;{};{};{}", fg >> 16, (fg >> 8) & 255, fg & 255, bg >> 16, (bg >> 8) & 255, bg & 255);
-				for (on, code) in [(attr.bold, ";1"), (attr.italic, ";3"), (attr.underline, ";4"), (attr.strike, ";9")] {
-					if on {
-						out.push_str(code);
-					}
+			for c in 0..cells.w {
+				let cell = cells.get(r, c).unwrap_or(&self.blank);
+				// The right half of a double-width char is "".
+				if cell.text.is_empty() {
+					continue;
 				}
-				out.push('m');
-				last = Some(key);
+				let attr = self.hl.get(&cell.hl).copied().unwrap_or_default();
+				let (fg, len) = (attr.fg.unwrap_or(self.fg), cell.text.encode_utf16().count());
+				let marked = attr.bg.is_some_and(|bg| bg != self.bg) || attr.reverse;
+				match runs.last_mut() {
+					Some(run)
+						if run.to == at
+							&& run.fg == fg
+							&& run.bold == attr.bold
+							&& run.italic == attr.italic
+							&& run.marked == marked =>
+					{
+						run.to += len;
+					},
+					_ => runs.push(Run { from: at, to: at + len, fg, bold: attr.bold, italic: attr.italic, marked }),
+				}
+				text.push_str(&cell.text);
+				at += len;
 			}
-			out.push_str(&cell.text);
 		}
-		out.push_str("\x1b[0m");
+		(text, runs)
+	}
+
+	/// The offset Tern counts for cell `(r, c)` of grid `g`.
+	pub fn offset(&self, g: u64, r: usize, c: usize) -> usize {
+		let Some(cells) = self.grids.get(&g) else { return 0 };
+		let mut at = 0;
+		for row in 0..cells.h.min(r + 1) {
+			if row > 0 {
+				at += 1;
+			}
+			let last = if row == r { c } else { cells.w };
+			for col in 0..last.min(cells.w) {
+				at += cells.get(row, col).map_or(1, |cell| cell.text.encode_utf16().count());
+			}
+		}
+		at
+	}
+
+	/// The cell of grid `g` at the offset Tern counts, for a click.
+	pub fn at_offset(&self, g: u64, offset: usize) -> (usize, usize) {
+		let Some(cells) = self.grids.get(&g) else { return (0, 0) };
+		let mut at = 0;
+		for row in 0..cells.h {
+			if row > 0 {
+				at += 1;
+			}
+			for col in 0..cells.w {
+				if at >= offset {
+					return (row, col);
+				}
+				at += cells.get(row, col).map_or(1, |cell| cell.text.encode_utf16().count());
+			}
+			if at >= offset {
+				return (row, cells.w.saturating_sub(1));
+			}
+		}
+		(cells.h.saturating_sub(1), 0)
+	}
+
+	/// The cursor as nvim sends it: `(grid, row, col)`.
+	pub fn caret(&self) -> (u64, usize, usize) {
+		self.cursor
+	}
+
+	/// Every foreground color a cell can take, for the sheet that names them.
+	pub fn palette(&self) -> Vec<u32> {
+		let mut out: Vec<u32> = self.hl.values().filter_map(|a| a.fg).collect();
+		out.push(self.fg);
 		out
 	}
 }
@@ -624,8 +683,9 @@ impl Grid {
 mod tests {
 	use super::*;
 
-	fn plain(g: &Grid, src: u64, r: usize) -> String {
-		(0..g.w).map(|c| g.cell(src, r, c).text.clone()).collect()
+	/// The text of grid `src`, as the editor shows it.
+	fn plain(g: &Grid, src: u64) -> String {
+		g.text(src).0
 	}
 
 	fn ev(name: &str, args: Vec<Value>) -> Value {
@@ -636,8 +696,10 @@ mod tests {
 	fn line_repeat_and_scroll() {
 		let mut g = Grid::default();
 		let cells = |s: Vec<Value>| Value::Array(s);
+		let attr = Value::Map(vec![("foreground".into(), 0xff0000.into())]);
 		let flushed = g.apply(&[
 			ev("grid_resize", vec![1.into(), 4.into(), 3.into()]),
+			ev("hl_attr_define", vec![5.into(), attr, Value::Map(vec![]), Value::Array(vec![])]),
 			// "ab" with hl 5, then "x" repeated twice keeping hl 5.
 			ev("grid_line", vec![1.into(), 0.into(), 0.into(), cells(vec![
 				Value::Array(vec!["a".into(), 5.into()]),
@@ -649,14 +711,15 @@ mod tests {
 			Value::Array(vec!["flush".into(), Value::Array(vec![])]),
 		]);
 		assert!(flushed);
-		assert_eq!(plain(&g, 1, 0), "abxx");
-		assert_eq!(g.cell(1, 0, 1).hl, 5);
+		let (text, runs) = g.text(1);
+		assert_eq!(text, "abxx\n1111\n2222");
+		// One run per color per row: the first row is hl 5, the rows below take the default.
+		let want = [(0, 4, 0xff0000), (5, 9, 0xffffff), (10, 14, 0xffffff)];
+		assert_eq!(runs.iter().map(|r| (r.from, r.to, r.fg)).collect::<Vec<_>>(), want);
 		g.apply(&[ev("grid_scroll", vec![1.into(), 0.into(), 3.into(), 0.into(), 4.into(), 1.into()])]);
-		assert_eq!((plain(&g, 1, 0), plain(&g, 1, 1)), ("1111".into(), "2222".into()));
-		g.apply(&[ev("grid_scroll", vec![1.into(), 0.into(), 3.into(), 0.into(), 4.into(), (-2).into()])]);
-		assert_eq!(plain(&g, 1, 2), "1111");
+		assert_eq!(plain(&g, 1), "1111\n2222\n2222");
 		g.apply(&[ev("grid_resize", vec![1.into(), 2.into(), 1.into()])]);
-		assert_eq!(plain(&g, 1, 0), "11");
+		assert_eq!(plain(&g, 1), "11");
 	}
 
 	#[test]
@@ -668,27 +731,28 @@ mod tests {
 		};
 		g.apply(&[
 			ev("grid_resize", vec![1.into(), 4.into(), 2.into()]),
-			line(1, 0, "...."),
-			line(1, 1, "####"),
-			// A split of 2x1 at column 2 of the screen, and a 2x1 float at row 1, column 0.
-			ev("grid_resize", vec![2.into(), 2.into(), 1.into()]),
-			ev("win_pos", vec![2.into(), Value::Nil, 0.into(), 2.into(), 2.into(), 1.into()]),
+			// A split of 2x2 at column 2 of the screen, and a 2x1 float at row 1, column 0.
+			ev("grid_resize", vec![2.into(), 2.into(), 2.into()]),
+			ev("win_pos", vec![2.into(), Value::Nil, 0.into(), 2.into(), 2.into(), 2.into()]),
 			line(2, 0, "ab"),
+			line(2, 1, "cd"),
 			ev("grid_resize", vec![3.into(), 2.into(), 1.into()]),
 			ev("win_float_pos", vec![3.into(), Value::Nil, "NW".into(), 1.into(), 0.into(), 0.into(), true.into(), 50.into(), 1.into(), 1.into(), 0.into()]),
-			line(3, 0, "cd"),
-			ev("grid_cursor_goto", vec![2.into(), 0.into(), 1.into()]),
+			line(3, 0, "ef"),
+			ev("grid_cursor_goto", vec![2.into(), 1.into(), 1.into()]),
 		]);
-		// The split's cells sit at its screen columns; the float keeps its own grid.
-		assert_eq!(plain(&g, 1, 0), "..ab");
-		assert_eq!(plain(&g, 1, 1), "####");
-		assert_eq!((0..2).map(|c| g.cell(3, 0, c).text.clone()).collect::<String>(), "cd");
-		// The cursor of a split is a screen position; a float's stays in its grid.
-		assert_eq!(g.cursor(), (1, 0, 3));
+		// Each window draws its own grid, at the cells `win_pos` gave it.
+		assert_eq!(g.splits().iter().map(|(id, w)| (*id, w.row, w.col, w.w, w.h)).collect::<Vec<_>>(), [(2, 0, 2, 2, 2)]);
+		assert_eq!(plain(&g, 2), "ab\ncd");
+		assert_eq!(plain(&g, 3), "ef");
 		assert_eq!(g.floats().iter().map(|(id, w)| (*id, w.row, w.col, w.w, w.h)).collect::<Vec<_>>(), [(3, 1, 0, 2, 1)]);
-		// A closed window leaves grid 1's cells showing.
+		// The caret of the second row's second cell is after "ab\nc"; a click there comes back.
+		assert_eq!(g.caret(), (2, 1, 1));
+		assert_eq!(g.offset(2, 1, 1), 4);
+		assert_eq!(g.at_offset(2, 4), (1, 1));
+		// A closed window leaves no box behind.
 		g.apply(&[ev("win_close", vec![2.into()])]);
-		assert_eq!(plain(&g, 1, 0), "....");
+		assert!(g.splits().is_empty());
 	}
 
 	#[test]

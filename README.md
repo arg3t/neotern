@@ -21,8 +21,9 @@ arguments and exits with its status.
 - `src/nvim.rs`: spawns `nvim --embed`. A reader thread sends each `redraw` notification to a
   channel. All API calls are notifications, so no request ids are tracked.
 - `src/grid.rs`: one cell grid per nvim grid (`grid_resize`, `grid_line`, `grid_scroll`,
-  `grid_clear`, `grid_destroy`, `grid_cursor_goto`, `hl_attr_define`, `default_colors_set`). It
-  renders a row of any grid as truecolor SGR.
+  `grid_clear`, `grid_destroy`, `grid_cursor_goto`, `hl_attr_define`, `default_colors_set`) and
+  where each window sits (`win_pos`, `win_float_pos`). It gives a grid's cells as text with one
+  colored run per cell run, in the offsets Tern counts.
 - `src/main.rs`: the TSP session ([tern-sdk](https://github.com/stencil-hq/tern-sdk)), key to
   `nvim_input` notation, bracketed paste to `nvim_paste`, and pty resize to `nvim_ui_try_resize`.
   It renders on each `flush`. The SDK sends only the changed rows and respects frame credits.
@@ -82,12 +83,24 @@ arguments and exits with its status.
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
   nvim-treesitter-context is off as well: its context float drew over the first text row, and the
   breadcrumbs already name the cursor's scope.
-- Windows (`ext_multigrid`): each window has its own grid. A split is composited onto the screen
-  at the position of its `win_pos`, so the screen rows hold the splits, the separators and
-  anything grid 1 draws. Each float (`win_float_pos`) is its own Tern card in the layer, anchored
-  to the cell nvim placed it at (`screen_row`, `screen_col`), in `compindex` order. So hover,
-  signature help and Telescope are real cards over the text, and `grid_destroy`, `win_hide` and
-  `win_close` take them down.
+- Windows (`ext_multigrid`): each window has its own grid, and each one is a Tern `editor` of that
+  grid's text, so the text is real text: Tern draws the caret, keeps a selection and lands a click
+  on a character. The `layout` sheet puts every window box at its cell position (pixels of the cell
+  size the `resize` event gives), so nvim still lays the screen out. `nowrap` and `followCursor`
+  are off, because the text is what the window already shows: nvim owns the wrapping and the
+  scrolling. Each float (`win_float_pos`) is the same editor in a card over the caret, in
+  `compindex` order, and `grid_destroy`, `win_hide` and `win_close` take them down.
+- The cursor: a block or replace cursor is a decoration over its cell, in the terminal theme's
+  cursor color, as nvim draws it. In insert mode it is Tern's own caret, a bar between two
+  characters. A cell that carries a background of its own (the visual selection, a search match, a
+  diff) is marked with nvim's `Visual` background.
+- Mouse: a click in a window arrives as an `edit` event with the caret's offset. neotern turns the
+  offset back into a cell and sends `nvim_input_mouse` for that window's grid, so nvim resolves the
+  buffer position itself, folds, signs and wrapping included. A click in another window asks for
+  the keys (a `focus` event), which becomes `nvim_set_current_win`.
+- which-key: after attach, neotern runs `src/keys.lua`. It hides which-key's windows and sends the
+  keys that can follow as a `neotern_keys` redraw, which shows as a card at the bottom: one row per
+  key, with its keycap and description, and a folder icon for a group.
 
 ## Limits
 
@@ -96,20 +109,23 @@ arguments and exits with its status.
   `recording @q` are toasts too, so they go after about 3 s. A message card shows only the last
   30 lines. 'showcmd' and 'ruler' are not drawn.
 - The loop polls pane input every 4 ms, so a redraw can wait up to 4 ms.
-- The grid is 8 rows shorter than the pty at 16 px cells: the screen surface loses 114 px to
-  Tern's chrome and the bars (`CHROME_PX`, measured with `tern shot`).
+- The grid is 6 rows and 4 columns smaller than the pty at 8 x 16 px cells: the screen surface
+  loses 88 px of height and 28 px of width to Tern's chrome and the bars (`CHROME_PX` and
+  `CHROME_W`, measured with `tern shot`).
 - Bars: they show nvim's foreground colors only, not the background colors. Only the current
   window's status line shows. The breadcrumbs come only from barbecue.nvim, through its
   internals (`barbecue.ui.components`), and they are not shortened to fit. Two tabs with the
   same file name have the same label.
-- Mouse input is not forwarded: Tern reports a pointer only as an event of the node it hit
-  (`select`, `activate`, `action`), with no row or column, so `nvim_input_mouse` has nothing to
-  send. Clicks work on the parts Tern draws itself: the tabs, the completion rows and the picker
-  rows. Undercurl colors are not supported either.
-- Floats: a float keeps its own border cells inside Tern's card, so a bordered float shows both.
-  A float does not blend with the text under it, and a float wider than the surface is clipped by
-  Tern, not re-positioned. `src/blink.lua` hides blink's menu scrollbar, which is two 1-cell
-  floats.
+- Windows: a cell's background becomes one mark, so a search match looks like the selection, and
+  `reverse` cells are marked too. Tern's native editing owns a few keys in a focused window
+  (shift with the arrows, ⌘A, ⌘C), which therefore never reach nvim; the user setting is
+  Settings › Terminal › Native composer editing. A window wider or taller than the surface is
+  clipped, not scrolled.
+- Underline, undercurl and strikethrough cells lose their line: a run keeps its color, its weight
+  and its italics only.
+- Floats: a float keeps its own border cells inside Tern's card, so a bordered float shows both,
+  and the card hangs under the caret instead of the cell nvim placed it at. `src/blink.lua` hides
+  blink's menu scrollbar, which is two 1-cell floats.
 - Command line: Ctrl+Z is a plain key (nvim's command line has no undo). Only the innermost
   command line shows (`<C-r>=` replaces the outer one). Multi-line blocks (`cmdline_block_*`,
   for example `:function`) and the `<C-v>` marker (`cmdline_special_char`) are not drawn.
