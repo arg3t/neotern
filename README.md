@@ -61,6 +61,10 @@ arguments and exits with its status.
   status line goes to a Tern status strip at the bottom ('laststatus' is set to 0). The middle
   part (after a first `%=`) is centered. The breadcrumbs go to one line under the tabs, and
   barbecue's own winbar is turned off. The colors are nvim's foreground colors.
+- Hover and signature help: after attach, neotern runs `src/float.lua`, which wraps
+  `vim.lsp.util.open_floating_preview`. It hides the window nvim made and sends the text, so `K`,
+  signature help and the diagnostic float show as a Tern markdown card under the cursor, with
+  highlighted code blocks. The buffer and window stay, so nvim's own close events still work.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
