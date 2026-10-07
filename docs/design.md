@@ -87,23 +87,10 @@ arguments and exits with its status.
 - Windows (`ext_multigrid`): each window has its own grid, and each one is a Tern `editor` of that
   grid's text, so the text is real text: Tern draws the caret, keeps a selection and lands a click
   on a character. The `layout` sheet puts every window box at its cell position (pixels of the cell
-  size the `resize` event gives), so nvim still lays the screen out. `nowrap` is on, because nvim
-  owns the wrapping. Each float (`win_float_pos`) is the same editor in a card over the caret, in
+  size the `resize` event gives), so nvim still lays the screen out. `nowrap` and `followCursor`
+  are off, because the text is what the window already shows: nvim owns the wrapping and the
+  scrolling. Each float (`win_float_pos`) is the same editor in a card over the caret, in
   `compindex` order, and `grid_destroy`, `win_hide` and `win_close` take them down.
-- Who scrolls (`g:neotern_overscan`, default 1): with 1 the grid is the box, so the text is what the
-  window shows and nvim owns every scroll (`followCursor` off). With `n` over 1, neotern asks for a
-  grid `n` times as tall (`nvim_ui_try_resize_grid`), nvim renders those lines, the editor is
-  `capped` at the box height, and Tern scrolls them (`followCursor` on, so it returns to the caret).
-  neotern then sets the window's `'scroll'` to half the visible height, so `<C-d>` still pages what
-  you see, and its `'scrolloff'` to half the grid, so nvim centres the cursor and the wheel has room
-  on both sides. The grid never gets more rows than the buffer has lines, so the end of a short file
-  is the end. Measured: a 146x41 box with `overscan = 3` gives a grid of 146x123, 1968 px of text in
-  a 656 px box; the caret at line 95 scrolled the text to -764 px, and `G` in an 811-line file put
-  the status at `811:1 Bot` with the last rows in the box.
-  The window's scroller is `overscroll-behavior: contain`, so a wheel at the end of the band stays
-  there instead of dragging the pane (and the tab strip and breadcrumbs) with it.
-  Nothing tells neotern where Tern scrolled to (TSP has no scroll event), so `H`, `M`, `L`, `zz`,
-  `zt`, `zb`, `'scrolloff'` and the status percentage describe the grid, not the screen.
 - The cursor: a block or replace cursor is a decoration over its cell, in the terminal theme's
   cursor color, as nvim draws it. In insert mode it is Tern's own caret, a bar between two
   characters. A cell that carries a background of its own (the visual selection, a search match, a
@@ -133,8 +120,8 @@ arguments and exits with its status.
 - Windows: a cell's background becomes one mark, so a search match looks like the selection, and
   `reverse` cells are marked too. Tern's native editing owns a few keys in a focused window
   (shift with the arrows, ⌘A, ⌘C), which therefore never reach nvim; the user setting is
-  Settings › Terminal › Native composer editing. A window wider than its box is clipped; a window
-  taller than its box scrolls only with `g:neotern_overscan` over 1.
+  Settings › Terminal › Native composer editing. A window wider or taller than the surface is
+  clipped, not scrolled.
 - Underline, undercurl and strikethrough cells lose their line: a run keeps its color, its weight
   and its italics only.
 - Floats: a float keeps its own border cells inside Tern's card, so a bordered float shows both,
