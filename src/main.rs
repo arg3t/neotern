@@ -63,12 +63,15 @@ const PALETTE_CSS: &str = "
 [data-role='mid'] { position: absolute; left: 50%; transform: translateX(-50%); }
 [data-role='float'].sf-overlay > .sf-ov-card { width: auto; padding: 0; border-radius: 8px; margin-top: -4px; }
 [data-role='float'].sf-overlay > .sf-ov-card.nohead > .sf-ov-body { padding: 0; gap: 0; }
-[data-role='doc-float'].sf-overlay > .sf-ov-card.nohead > .sf-ov-body { max-height: 320px; overflow: auto; padding: 10px 14px; font-size: 12px; }
+[data-role='doc-float'].sf-overlay > .sf-ov-card.nohead > .sf-ov-body { max-height: 320px; overflow: auto; overscroll-behavior: contain; padding: 10px 14px; font-size: 12px; }
 [data-id='layer.pick'] .pk-main { min-width: 0; }
 [data-id='layer.pick'] .pk-pv { width: 56%; flex: none; }
-[data-id='layer.pick'] .pk-pv-slot { max-height: 100%; overflow: auto; }
+[data-id='layer.pick'] .pk-pv-slot { max-height: 100%; overflow: auto; overscroll-behavior: contain; }
 [data-role^='w'].sf-editor { position: absolute; padding: 0; background: none; border-radius: 0; box-shadow: inset -1px 0 0 var(--l1); }
-[data-role^='w'].sf-editor .sf-ed-scroll { overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
+/* `contain` keeps the wheel inside the window: without it the pane scrolls at the ends and takes
+   the tab strip and the breadcrumbs with it. */
+[data-role^='w'].sf-editor .sf-ed-scroll { overflow-x: hidden; overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; }
+.sf-region.sf-main, .sf-region.sf-layer { overscroll-behavior: contain; }
 /* The caret keeps its box when the block cursor stands for it, so Tern still scrolls to it.
    `visibility` and not `opacity`, which Tern's own blink animates. */
 .sf-editor .sf-caret { visibility: hidden; }
@@ -226,16 +229,24 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 						// grid taller than the box, and Tern scrolls them. 'scroll' keeps <C-d> at
 						// half of what you see, not half of the grid.
 						for (g, win) in &splits {
-							let want = (win.w, win.h * grid.overscan);
+							// Never more rows than the file has: the last line is then really the end.
+							let cap = grid::win_number(&win.handle).and_then(|w| grid.lines.get(&w)).map_or(usize::MAX, |n| n + 1);
+							let want = (win.w, (win.h * grid.overscan).min(cap.max(win.h)));
 							if grids.get(g) == Some(&want) {
 								continue;
 							}
 							grids.insert(*g, want);
 							let (w, h) = (want.0 as i64, (grid.overscan > 1).then_some(want.1 as i64).unwrap_or(0));
 							nvim.notify("nvim_ui_try_resize_grid", vec![(*g as i64).into(), w.into(), h.into()])?;
-							let opts = Value::Map(vec![("win".into(), win.handle.clone())]);
+							let opts = || Value::Map(vec![("win".into(), win.handle.clone())]);
 							let scroll = (win.h / 2).max(1) as i64;
-							nvim.notify("nvim_set_option_value", vec!["scroll".into(), scroll.into(), opts])?;
+							nvim.notify("nvim_set_option_value", vec!["scroll".into(), scroll.into(), opts()])?;
+							// A tall grid only holds text around the cursor, so nvim must keep the
+							// cursor in its middle: the wheel then has room above it and below it.
+							if grid.overscan > 1 {
+								let off = (want.1 / 2) as i64;
+								nvim.notify("nvim_set_option_value", vec!["scrolloff".into(), off.into(), opts()])?;
+							}
 						}
 						session.render(sf, view(&grid))?;
 						// The caret is the cmdline's while one is open, else the window's that nvim

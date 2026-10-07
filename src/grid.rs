@@ -61,6 +61,8 @@ pub struct Grid {
 	/// How many screens of text a window grid holds (`g:neotern_overscan`): 1 leaves the scrolling
 	/// to nvim, more gives each window a grid taller than its box, which Tern then scrolls.
 	pub overscan: usize,
+	/// The line count of each window's buffer, by nvim window id.
+	pub lines:    HashMap<i64, usize>,
 	/// The hover or signature help text, from `float.lua`.
 	pub doc:      Option<String>,
 	/// The Telescope picker while one is open, from `telescope.lua`.
@@ -101,6 +103,7 @@ impl Default for Grid {
 			icons:    HashMap::new(),
 			sel:      None,
 			overscan: 1,
+			lines:    HashMap::new(),
 			doc:      None,
 			pick:     None,
 			keys:     None,
@@ -188,6 +191,12 @@ pub struct Win {
 	pub float:  Option<i64>,
 	/// nvim's window handle, for `nvim_set_current_win`.
 	pub handle: Value,
+}
+
+/// nvim's window id inside the handle it sends: an ext whose payload is the id.
+pub fn win_number(handle: &Value) -> Option<i64> {
+	let Value::Ext(_, data) = handle else { return None };
+	rmpv::decode::read_value(&mut data.as_slice()).ok().as_ref().and_then(Value::as_i64)
 }
 
 /// One colored run of a window's text, in the offsets Tern counts (UTF-16 units).
@@ -429,6 +438,14 @@ impl Grid {
 						}).collect();
 						self.sel = a.get(3).map(|v| int(v)).and_then(|c| u32::try_from(c).ok());
 						self.overscan = a.get(4).map_or(1, |v| int(v).clamp(1, 8) as usize);
+						let lines = a.get(5).and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+						self.lines = lines
+							.iter()
+							.filter_map(|w| {
+								let [win, count] = w.as_array()?.as_slice() else { return None };
+								Some((int(win), int(count).max(0) as usize))
+							})
+							.collect();
 					},
 					"mode_info_set" => {
 						let on = a[0].as_bool().unwrap_or(false);

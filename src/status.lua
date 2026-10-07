@@ -4,7 +4,8 @@
 -- 3. the nvim-web-devicons icon of each buffer's file name, for the tabs: `{ name, glyph, fg }`;
 -- 4. the `Visual` background, which Tern paints behind every cell that carries a background;
 -- 5. `g:neotern_overscan`: how many screens of text each window grid holds (1 keeps nvim's
---    scrolling, more hands the scrolling to Tern).
+--    scrolling, more hands the scrolling to Tern);
+-- 6. the line count of every window's buffer, so a grid never asks for more rows than the file has.
 -- 1 and 2 are highlight runs `{ side, text, fg, bold }`: side 0 is left, 1 the middle (after a
 -- first `%=`), 2 right (after the last `%=`).
 -- ponytail: polls every 100ms and sends on change; lualine itself refreshes on a timer too.
@@ -120,7 +121,11 @@ local function tick()
   if stl == '' or stl == BAR then stl = DEFAULT end
   local sel = vim.api.nvim_get_hl(0, { name = 'Visual', link = false }).bg or -1
   local over = math.floor(tonumber(vim.g.neotern_overscan) or 1)
-  local ev = { runs(stl, win, false), runs(crumbs(win), win, true), icons(), sel, over }
+  local lines = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    lines[#lines + 1] = { w, vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(w)) }
+  end
+  local ev = { runs(stl, win, false), runs(crumbs(win), win, true), icons(), sel, over, lines }
   local key = vim.inspect(ev)
   if key ~= last then
     last = key

@@ -99,10 +99,14 @@ vim.g.neotern_overscan = 3   -- give each window grid 3 screens of text
 ```
 
 With more than one screen, nvim renders the extra lines into the grid and **Tern** scrolls them:
-the wheel works, and Tern scrolls back to the cursor whenever it moves. The cost is that nvim
-believes its window is that tall, so `H`, `M`, `L`, `zz`, `zt`, `zb`, `'scrolloff'` and the status
-percentage speak about the whole grid, not about what you see. neotern sets `'scroll'` to half the
-visible height, so `<C-d>` and `<C-u>` stay right.
+the wheel works, and Tern scrolls back to the cursor whenever it moves. neotern keeps that band
+useful: it sets `'scrolloff'` so nvim centres the cursor in the grid, which leaves wheel room above
+and below it, it never asks for more rows than the file has, so the last line really is the end, and
+it sets `'scroll'` to half the visible height, so `<C-d>` and `<C-u>` still page what you see.
+
+The wheel reaches the ends of that band and stops there, because TSP never tells a program that the
+user scrolled. Keys move the view further, and the band follows the cursor. For the same reason
+`H`, `M`, `L`, `zz`, `zt`, `zb` and `'scrolloff'` speak about the grid, not about what you see.
 
 ## How it works
 

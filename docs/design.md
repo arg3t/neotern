@@ -95,8 +95,13 @@ arguments and exits with its status.
   grid `n` times as tall (`nvim_ui_try_resize_grid`), nvim renders those lines, the editor is
   `capped` at the box height, and Tern scrolls them (`followCursor` on, so it returns to the caret).
   neotern then sets the window's `'scroll'` to half the visible height, so `<C-d>` still pages what
-  you see. Measured: a 146x41 box with `overscan = 3` gives a grid of 146x123, 1968 px of text in a
-  656 px box, and the caret at line 95 scrolled the text to -764 px.
+  you see, and its `'scrolloff'` to half the grid, so nvim centres the cursor and the wheel has room
+  on both sides. The grid never gets more rows than the buffer has lines, so the end of a short file
+  is the end. Measured: a 146x41 box with `overscan = 3` gives a grid of 146x123, 1968 px of text in
+  a 656 px box; the caret at line 95 scrolled the text to -764 px, and `G` in an 811-line file put
+  the status at `811:1 Bot` with the last rows in the box.
+  The window's scroller is `overscroll-behavior: contain`, so a wheel at the end of the band stays
+  there instead of dragging the pane (and the tab strip and breadcrumbs) with it.
   Nothing tells neotern where Tern scrolled to (TSP has no scroll event), so `H`, `M`, `L`, `zz`,
   `zt`, `zb`, `'scrolloff'` and the status percentage describe the grid, not the screen.
 - The cursor: a block or replace cursor is a decoration over its cell, in the terminal theme's
