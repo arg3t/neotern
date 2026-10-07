@@ -89,6 +89,21 @@ My own config needs these three guards:
 [nvim-treesitter-context](https://github.com/nvim-treesitter/nvim-treesitter-context) off (the
 breadcrumbs already name the scope), and `cmdheight = 0`.
 
+### Who scrolls
+
+By default nvim owns the viewport: each window grid is exactly the box on screen, so every scroll
+is nvim's and the wheel does nothing.
+
+```lua
+vim.g.neotern_overscan = 3   -- give each window grid 3 screens of text
+```
+
+With more than one screen, nvim renders the extra lines into the grid and **Tern** scrolls them:
+the wheel works, and Tern scrolls back to the cursor whenever it moves. The cost is that nvim
+believes its window is that tall, so `H`, `M`, `L`, `zz`, `zt`, `zb`, `'scrolloff'` and the status
+percentage speak about the whole grid, not about what you see. neotern sets `'scroll'` to half the
+visible height, so `<C-d>` and `<C-u>` stay right.
+
 ## How it works
 
 Four source files and five Lua bridges, about 1500 lines:

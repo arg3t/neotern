@@ -58,6 +58,9 @@ pub struct Grid {
 	pub icons:    HashMap<String, (String, Option<u32>)>,
 	/// nvim's `Visual` background, for the cells a window marks.
 	pub sel:      Option<u32>,
+	/// How many screens of text a window grid holds (`g:neotern_overscan`): 1 leaves the scrolling
+	/// to nvim, more gives each window a grid taller than its box, which Tern then scrolls.
+	pub overscan: usize,
 	/// The hover or signature help text, from `float.lua`.
 	pub doc:      Option<String>,
 	/// The Telescope picker while one is open, from `telescope.lua`.
@@ -97,6 +100,7 @@ impl Default for Grid {
 			crumbs:   Vec::new(),
 			icons:    HashMap::new(),
 			sel:      None,
+			overscan: 1,
 			doc:      None,
 			pick:     None,
 			keys:     None,
@@ -424,6 +428,7 @@ impl Grid {
 							Some((name.as_str()?.into(), (glyph.as_str()?.into(), u32::try_from(int(fg)).ok())))
 						}).collect();
 						self.sel = a.get(3).map(|v| int(v)).and_then(|c| u32::try_from(c).ok());
+						self.overscan = a.get(4).map_or(1, |v| int(v).clamp(1, 8) as usize);
 					},
 					"mode_info_set" => {
 						let on = a[0].as_bool().unwrap_or(false);

@@ -87,10 +87,18 @@ arguments and exits with its status.
 - Windows (`ext_multigrid`): each window has its own grid, and each one is a Tern `editor` of that
   grid's text, so the text is real text: Tern draws the caret, keeps a selection and lands a click
   on a character. The `layout` sheet puts every window box at its cell position (pixels of the cell
-  size the `resize` event gives), so nvim still lays the screen out. `nowrap` and `followCursor`
-  are off, because the text is what the window already shows: nvim owns the wrapping and the
-  scrolling. Each float (`win_float_pos`) is the same editor in a card over the caret, in
+  size the `resize` event gives), so nvim still lays the screen out. `nowrap` is on, because nvim
+  owns the wrapping. Each float (`win_float_pos`) is the same editor in a card over the caret, in
   `compindex` order, and `grid_destroy`, `win_hide` and `win_close` take them down.
+- Who scrolls (`g:neotern_overscan`, default 1): with 1 the grid is the box, so the text is what the
+  window shows and nvim owns every scroll (`followCursor` off). With `n` over 1, neotern asks for a
+  grid `n` times as tall (`nvim_ui_try_resize_grid`), nvim renders those lines, the editor is
+  `capped` at the box height, and Tern scrolls them (`followCursor` on, so it returns to the caret).
+  neotern then sets the window's `'scroll'` to half the visible height, so `<C-d>` still pages what
+  you see. Measured: a 146x41 box with `overscan = 3` gives a grid of 146x123, 1968 px of text in a
+  656 px box, and the caret at line 95 scrolled the text to -764 px.
+  Nothing tells neotern where Tern scrolled to (TSP has no scroll event), so `H`, `M`, `L`, `zz`,
+  `zt`, `zb`, `'scrolloff'` and the status percentage describe the grid, not the screen.
 - The cursor: a block or replace cursor is a decoration over its cell, in the terminal theme's
   cursor color, as nvim draws it. In insert mode it is Tern's own caret, a bar between two
   characters. A cell that carries a background of its own (the visual selection, a search match, a
