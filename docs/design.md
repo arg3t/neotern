@@ -128,8 +128,8 @@ arguments and exits with its status.
 - Windows: a cell's background becomes one mark, so a search match looks like the selection, and
   `reverse` cells are marked too. Tern's native editing owns a few keys in a focused window
   (shift with the arrows, ⌘A, ⌘C), which therefore never reach nvim; the user setting is
-  Settings › Terminal › Native composer editing. A window wider or taller than the surface is
-  clipped, not scrolled.
+  Settings › Terminal › Native composer editing. A window wider than its box is clipped; a window
+  taller than its box scrolls only with `g:neotern_overscan` over 1.
 - Underline, undercurl and strikethrough cells lose their line: a run keeps its color, its weight
   and its italics only.
 - Floats: a float keeps its own border cells inside Tern's card, so a bordered float shows both,
