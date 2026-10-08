@@ -44,7 +44,84 @@ local function hide(p)
   end
 end
 
---- The rows (`{ id, text }`) around the cursor, the selected one, and where they start in the list.
+local hl_cache = {}
+vim.api.nvim_create_autocmd('ColorScheme', { callback = function() hl_cache = {} end })
+
+-- A run's foreground is an RGB value, -1 for none, or one of these: a name for a Tern token, which
+-- reads on the sheet's own background in either theme, where nvim's colors assume nvim's.
+local DIM, MATCH = 0x1000001, 0x1000002
+local TOKENS = {
+  SnacksPickerDir = DIM,
+  SnacksPickerDimmed = DIM,
+  SnacksPickerPathHidden = DIM,
+  SnacksPickerPathIgnored = DIM,
+  SnacksPickerMatch = MATCH,
+}
+
+--- A highlight group's foreground (-1 for none, or a token) and weight.
+local function style(group)
+  local cached = hl_cache[group]
+  if not cached then
+    local hl = vim.api.nvim_get_hl(0, { name = group, link = false })
+    cached = { TOKENS[group] or hl.fg or -1, hl.bold or false }
+    hl_cache[group] = cached
+  end
+  return cached
+end
+
+--- The formatted row as colored runs `{ text, foreground, bold }`, from the text Snacks puts in its
+--- list and the extmarks that color it: a group over a byte range, and the icon as virtual text
+--- laid over the spaces that hold its place. A later extmark wins, so a match shows over its file.
+local function chunks_of(text, extmarks)
+  local fg, bold, overlay = {}, {}, {}
+  for _, mark in ipairs(extmarks) do
+    local col = mark.col or 0
+    if mark.virt_text and mark.virt_text_pos == 'overlay' then
+      local run, group = mark.virt_text[1][1], mark.virt_text[1][2]
+      group = type(group) == 'table' and group[#group] or group
+      local st = group and style(group) or { -1, false }
+      overlay[col + 1] = { run, st[1], st[2], vim.fn.strdisplaywidth(run) }
+    elseif mark.hl_group and mark.end_col then
+      local groups = type(mark.hl_group) == 'table' and mark.hl_group or { mark.hl_group }
+      for _, group in ipairs(groups) do
+        local st = style(group)
+        for i = col + 1, math.min(mark.end_col, #text) do
+          if st[1] ~= -1 then fg[i] = st[1] end
+          if st[2] then bold[i] = true end
+        end
+      end
+    end
+  end
+  local runs, buf, cur_fg, cur_bold = {}, {}, -1, false
+  local function flush()
+    if #buf > 0 then runs[#runs + 1] = { table.concat(buf), cur_fg, cur_bold } end
+    buf = {}
+  end
+  local i = 1
+  while i <= #text do
+    local icon = overlay[i]
+    if icon then
+      flush()
+      runs[#runs + 1] = { icon[1], icon[2], icon[3] }
+      i = i + icon[4]
+    else
+      local f, b = fg[i] or -1, bold[i] or false
+      if f ~= cur_fg or b ~= cur_bold then
+        flush()
+        cur_fg, cur_bold = f, b
+      end
+      buf[#buf + 1] = text:sub(i, i)
+      i = i + 1
+    end
+  end
+  flush()
+  -- The first column holds the selection mark, and the end is padding.
+  if runs[1] then runs[1][1] = runs[1][1]:gsub('^%s+', '') end
+  if runs[#runs] then runs[#runs][1] = runs[#runs][1]:gsub('%s+$', '') end
+  return vim.tbl_filter(function(run) return run[1] ~= '' end, runs)
+end
+
+--- The rows (`{ id, text, runs }`) around the cursor, the selected one, and where they start in the list.
 local function rows_of(p)
   local list = p.list
   local count = list:count()
@@ -53,13 +130,14 @@ local function rows_of(p)
   for idx = first, math.min(count, first + MAX_ROWS - 1) do
     local item = list:get(idx)
     if item then
-      local ok, text = pcall(function() return (list:format(item)) end)
+      local ok, text, extmarks = pcall(list.format, list, item)
+      local runs = ok and chunks_of(text, extmarks) or {}
       text = ok and text or tostring(item.text or '')
       -- An id names a row for Tern, so two rows with the same text get a suffix.
       local id = tostring(item.text or text)
       seen[id] = (seen[id] or 0) + 1
       if seen[id] > 1 then id = id .. '\0' .. seen[id] end
-      rows[#rows + 1] = { id, text }
+      rows[#rows + 1] = { id, text, runs }
     end
   end
   return rows, first, count > 0 and list.cursor - first + 1 or 0

@@ -207,6 +207,8 @@ pub struct Pick {
 	pub prompt:  String,
 	/// The visible entries in order, each its id (the sorted-on text) and its display text.
 	pub rows:    Vec<(String, String)>,
+	/// The rows that come colored (Snacks'), by id: each run is its text, color and weight.
+	pub styled:  HashMap<String, Vec<(String, Option<u32>, bool)>>,
 	/// The selected row, 1-based; 0 when there is none.
 	pub sel:     usize,
 	/// The previewed text and its filetype.
@@ -412,12 +414,21 @@ impl Grid {
 						});
 					},
 					"neotern_picker" => {
+						let rows = a.get(2).and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
 						self.pick = (a.len() >= 10).then(|| Pick {
 							title:   a[0].as_str().unwrap_or_default().into(),
 							prompt:  a[1].as_str().unwrap_or_default().into(),
-							rows:    a[2].as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|r| {
-								let [id, text] = r.as_array()?.as_slice() else { return None };
+							rows:    rows.iter().filter_map(|r| {
+								let [id, text, ..] = r.as_array()?.as_slice() else { return None };
 								Some((id.as_str()?.to_owned(), text.as_str()?.to_owned()))
+							}).collect(),
+							styled:  rows.iter().filter_map(|r| {
+								let [id, _, runs] = r.as_array()?.as_slice() else { return None };
+								let runs = runs.as_array()?.iter().filter_map(|run| {
+									let [text, fg, bold] = run.as_array()?.as_slice() else { return None };
+									Some((text.as_str()?.to_owned(), u32::try_from(int(fg)).ok(), bold.as_bool()?))
+								}).collect::<Vec<_>>();
+								Some((id.as_str()?.to_owned(), runs))
 							}).collect(),
 							sel:     int(&a[3]).max(0) as usize,
 							preview: a[4].as_str().unwrap_or_default().into(),

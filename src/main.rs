@@ -227,6 +227,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 						colors.extend(grid.status.iter().chain(&grid.crumbs).filter_map(|c| c.fg).chain(icons));
 						colors.extend(grid.palette().into_iter().chain(grid.sel));
 						colors.extend(grid.tree.iter().flat_map(|t| t.rows.iter().filter_map(|r| r.color)));
+						colors.extend(grid.pick.iter().flat_map(|p| p.styled.values().flatten().filter_map(|(_, fg, _)| *fg)));
 						if colors.len() != n || sel != grid.sel {
 							sel = grid.sel;
 							session.stylesheet(sf, "colors", Some(&colors_css(&colors, grid.sel)))?;
@@ -372,11 +373,19 @@ fn view(grid: &Grid) -> View {
 		let items: Vec<ui::PickerItem> = p
 			.rows
 			.iter()
-			.map(|(id, text)| {
+			.map(|(id, text)| match p.styled.get(id).filter(|runs| !runs.is_empty()) {
+				// A Snacks row arrives colored: its icon, its directory and file, and the characters
+				// the query matched, in the colors nvim gives them.
+				Some(runs) => {
+					let label: Vec<ui::Span> = runs.iter().flat_map(|(t, fg, bold)| spans(t, *fg, *bold)).collect();
+					ui::PickerItem::new(id.as_str(), label)
+				},
 				// A row's text starts with its devicon glyph, which Tern has no name for. `mono`
 				// splits what is left on the last `/`, so the directory dims and the name stands out.
-				let text = text.trim_start_matches(|c| matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..)).trim_start();
-				ui::PickerItem { mono: Some(true), ..ui::PickerItem::new(id.as_str(), text) }
+				None => {
+					let text = text.trim_start_matches(|c| matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..)).trim_start();
+					ui::PickerItem { mono: Some(true), ..ui::PickerItem::new(id.as_str(), text) }
+				},
 			})
 			.collect();
 		let order: Vec<ui::OrderEntry> = p.rows.iter().map(|(id, _)| ui::OrderEntry::Item(id.clone())).collect();
@@ -519,11 +528,22 @@ fn tree_node(g: u64, tree: &grid::Tree) -> ui::Node {
 	ui::col().key(format!("w{g}")).role(format!("w{g}")).gap(ui::Gap::None).child(list).into()
 }
 
+/// A run color past the RGB range names a Tern token instead (`snacks.lua` sends these): the dim
+/// text of a directory, and the characters a query matched. They read on the sheet's own
+/// background in either theme, where nvim's colors are made for nvim's.
+const TOKEN_DIM: u32 = 0x100_0001;
+const TOKEN_MATCH: u32 = 0x100_0002;
+
 /// nvim text as spans: its color is the token `c<rrggbb>`, which `colors_css` defines; Nerd Font
 /// glyphs (Private Use Area) get the `icon` token. Tern draws a span with no known token as bare
 /// text, which takes no color, so each also gets `mono` (these strips are mono already).
 fn spans(text: &str, fg: Option<u32>, bold: bool) -> Vec<ui::Span> {
-	let mut style = fg.map(|fg| format!("c{fg:06x} mono")).unwrap_or_default();
+	let mut style = match fg {
+		Some(TOKEN_DIM) => "ntdim mono".to_owned(),
+		Some(TOKEN_MATCH) => "ntmatch mono".to_owned(),
+		Some(fg) => format!("c{fg:06x} mono"),
+		None => String::new(),
+	};
 	if bold {
 		style += " strong";
 	}
@@ -542,11 +562,21 @@ fn spans(text: &str, fg: Option<u32>, bold: bool) -> Vec<ui::Span> {
 /// The sheet that gives each color token its color: `--sf-p-<token>` is the color Tern puts on a
 /// span with an unknown token.
 fn colors_css(colors: &BTreeSet<u32>, sel: Option<u32>) -> String {
-	let mut vars: String = colors.iter().map(|c| format!("--sf-p-c{c:06x}: #{c:06x}; ")).collect();
+	let mut vars: String = colors.iter().filter(|c| **c <= 0xff_ffff).map(|c| format!("--sf-p-c{c:06x}: #{c:06x}; ")).collect();
+	// The picker's dim and match runs take Tern's own colors, which follow its theme.
+	vars += "--sf-p-ntdim: var(--t3); --sf-p-ntmatch: var(--accent-ink); ";
 	if let Some(sel) = sel {
 		let _ = write!(vars, "--nt-sel: #{sel:06x}; ");
 	}
-	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor, [data-role='sidebar'] {{ {vars}}}")
+	// On the sheet's own background nvim's colors are blended a quarter of the way into Tern's text
+	// color, which darkens them on the light theme and lightens them on the dark one, so a pale icon
+	// or a dim token still reads.
+	let tint: String = colors
+		.iter()
+		.filter(|c| **c <= 0xff_ffff)
+		.map(|c| format!("--sf-p-c{c:06x}: color-mix(in srgb, #{c:06x} 75%, var(--t1)); "))
+		.collect();
+	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor, [data-role='sidebar'], [data-id='layer.pick'] {{ {vars}}}\n[data-id='layer.pick'] {{ {tint}}}")
 }
 
 /// A message: one line is a toast, more is a card at the bottom that stays until a key.

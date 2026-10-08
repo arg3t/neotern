@@ -84,9 +84,18 @@ arguments and exits with its status.
   the preview), so it hides all of them and sends the state on each change: the title, the
   input's text, the list's rows around the cursor (up to 100, formatted by `list:format`), the
   selection, and the preview buffer's lines around the matched line. The file type comes from the
-  item's file, because Snacks leaves its own `snacks_picker_preview` on the buffer. A click
-  selects a row (`list:_move`) and a double click runs the `confirm` action. The sheet takes over
-  `neotern_pick` and passes the call to Telescope's when no Snacks picker is open.
+  item's file, because Snacks leaves its own `snacks_picker_preview` on the buffer. Each row also
+  carries colored runs (`{ text, color, bold }`) built from the text and extmarks `list:format`
+  returns: a highlight group over a byte range, and the icon as virtual text laid over the spaces
+  that hold its place. A later extmark wins, so the characters a query matched show over the file
+  name. `main.rs` draws the runs as spans. nvim's colors assume nvim's background, not the sheet's,
+  so two kinds of run name a Tern token instead of an RGB value: the dim directory
+  (`SnacksPickerDir` and its kin, `--t3`) and the matched characters (`SnacksPickerMatch`,
+  `--accent-ink`). Every other color is blended a quarter of the way into `--t1` inside the
+  sheet, which deepens a pale icon on the light theme and lifts it on the dark one. A row without
+  runs (Telescope's) is plain text.
+  A click selects a row (`list:_move`) and a double click runs the `confirm` action. The sheet
+  takes over `neotern_pick` and passes the call to Telescope's when no Snacks picker is open.
   Only a floating layout (`layout.root.opts.position == 'float'`) becomes a sheet.
   A sidebar layout (`left` or `right`, the explorer) is a split with two floats inside it. The
   split stays, since nvim keeps it in the layout and `screen_css` places it, and the floats are
