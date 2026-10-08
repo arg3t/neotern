@@ -12,7 +12,9 @@
 local MAX_ROWS = 100
 local MAX_TREE = 2000
 
-local hooked, dirty, window
+-- The picker behind each native element, by shape: a sidebar and a sheet can be open together (the
+-- explorer stays while a files picker opens), and each answers its own clicks and its own close.
+local hooked, windows = false, {}
 
 local function send(ev)
   local ui = vim.api.nvim_list_uis()[1]
@@ -105,13 +107,21 @@ local function chunks_of(text, extmarks)
       runs[#runs + 1] = { icon[1], icon[2], icon[3] }
       i = i + icon[4]
     else
+      -- A match covers bytes, so a character takes the strongest style of any of its bytes, and a
+      -- run never splits inside one.
+      local lead = text:byte(i)
+      local last = math.min(i + (lead >= 0xF0 and 3 or lead >= 0xE0 and 2 or lead >= 0xC0 and 1 or 0), #text)
       local f, b = fg[i] or -1, bold[i] or false
+      for j = i + 1, last do
+        if fg[j] == MATCH then f = MATCH end
+        b = b or bold[j] or false
+      end
       if f ~= cur_fg or b ~= cur_bold then
         flush()
         cur_fg, cur_bold = f, b
       end
-      buf[#buf + 1] = text:sub(i, i)
-      i = i + 1
+      buf[#buf + 1] = text:sub(i, last)
+      i = last + 1
     end
   end
   flush()
@@ -190,23 +200,28 @@ local function tree_of(p)
   return rows, current and (current.file or current.text) or ''
 end
 
+local pending = setmetatable({}, { __mode = 'k' })
+
 local function emit(p)
-  if dirty then return end
-  dirty = true
+  if not p or pending[p] then return end
+  pending[p] = true
   vim.schedule(function()
-    dirty = false
+    pending[p] = nil
     local shape = kind(p)
     if not shape then return end
     hide(p)
-    window = { picker = p, first = 1, kind = shape }
     if shape == 'tree' then
+      windows.tree = { picker = p }
       local rows, selected = tree_of(p)
       send({ 'neotern_tree', { p.layout.root.win, rows, selected } })
       return
     end
+    -- A reversed layout (Snacks' `telescope` one) puts the best match last and flips Up and Down.
+    -- The sheet lists the best match first, so its keys must step the way the rows run.
+    if p.list.reverse then p.list.reverse, p.list.dirty = false, true end
     local rows, first, sel = rows_of(p)
     local preview, ft, from, at = preview_of(p)
-    window.first = first
+    windows.sheet = { picker = p, first = first }
     send({ 'neotern_picker', { p.title or 'Find', p.input:get() or '', rows, sel, preview, ft,
       p:count(), p.preview ~= nil and p.preview.win ~= nil and p.preview.win:valid() or false, from, at } })
   end)
@@ -237,15 +252,20 @@ local function hook()
   wrap(Preview, 'show', function(_, picker) emit(picker) end)
   local close = Picker.close
   Picker.close = function(self, ...)
-    local was = window and window.picker == self and window.kind
+    local owned = {}
+    for shape, w in pairs(windows) do
+      if w.picker == self then owned[#owned + 1] = shape end
+    end
     close(self, ...)
-    if was then
-      window = nil
-      send({ was == 'tree' and 'neotern_tree' or 'neotern_picker', {} })
+    for _, shape in ipairs(owned) do
+      windows[shape] = nil
+      send({ shape == 'tree' and 'neotern_tree' or 'neotern_picker', {} })
     end
   end
   vim.api.nvim_create_autocmd({ 'VimResized', 'WinResized' }, {
-    callback = function() if window then emit(window.picker) end end,
+    callback = function()
+      for _, w in pairs(windows) do emit(w.picker) end
+    end,
   })
 end
 
@@ -253,20 +273,22 @@ end
 -- shared with Telescope's sheet, so whatever else answers (`telescope.lua`) keeps the call.
 local other = _G.neotern_pick
 function _G.neotern_pick(i, accept)
-  local p = window and window.picker
-  if not (p and not p.closed and p.list and window.kind == 'sheet') then
+  local w = windows.sheet
+  local p = w and w.picker
+  if not (p and not p.closed and p.list) then
     if other then return other(i, accept) end
     return
   end
-  p.list:_move(window.first + i - 1, true, true)
+  p.list:_move(w.first + i - 1, true, true)
   if accept then p:action('confirm') end
 end
 
 -- A click on a tree row: the row at list index `i` is selected and confirmed, which opens a file
 -- and toggles a directory.
 function _G.neotern_tree_pick(i)
-  local p = window and window.picker
-  if not (p and not p.closed and p.list and window.kind == 'tree') then return end
+  local w = windows.tree
+  local p = w and w.picker
+  if not (p and not p.closed and p.list) then return end
   p.list:_move(i, true, true)
   p:action('confirm')
 end

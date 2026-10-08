@@ -96,7 +96,12 @@ arguments and exits with its status.
   runs (Telescope's) is plain text.
   A click selects a row (`list:_move`) and a double click runs the `confirm` action. The sheet
   takes over `neotern_pick` and passes the call to Telescope's when no Snacks picker is open.
-  Only a floating layout (`layout.root.opts.position == 'float'`) becomes a sheet.
+  Only a floating layout (`layout.root.opts.position == 'float'`) becomes a sheet. A reversed
+  layout (Snacks' `telescope` one) puts the best match last and flips Up and Down, so the sheet
+  turns `list.reverse` off: it lists the best match first, and the keys step the way the rows run.
+  A sidebar and a sheet can be open together (the explorer stays while a files picker opens), so
+  each is tracked on its own: a click goes to the picker that owns that element, and closing one
+  clears only its own redraw.
   A sidebar layout (`left` or `right`, the explorer) is a split with two floats inside it. The
   split stays, since nvim keeps it in the layout and `screen_css` places it, and the floats are
   hidden. The picker sends a `neotern_tree` redraw with the split's window handle and a row per
@@ -108,7 +113,9 @@ arguments and exits with its status.
   cursor row is the list's `selected` item (its id is `<list id>.<row key>`), so Tern's own
   selection style applies: an accent tint and bar. The stylesheet sets the rest in Tern's tokens
   (`--panel`, `--l1`, `--t2`, `--sans`): rows are 24px, rounded and 120ms to hover, instant on
-  press, with a bold root. The icon colors are nvim's, sent as `colors` tokens.
+  press, with a bold root. The icon colors are nvim's, sent as `colors` tokens. The list is a
+  scroller of its own (`max_lines`), bounded to the split's box by `screen_css`, so Tern keeps the
+  cursor row in view. Its bound needs `!important`, because Tern sets an inline `max-height`.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.

@@ -79,7 +79,7 @@ const PALETTE_CSS: &str = "
 [data-role='float-text'] .sf-caret { display: none; }
 /* The sidebar picker: Tern's own look, a panel with a hairline, Geist rows that tint and take the
    accent bar when selected, and a bold root. Instant on press, 120ms on hover (Tern's `--ease`). */
-.sf-col[data-role^='w'] { background: var(--panel); border-right: 1px solid var(--l1); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--l3) transparent; }
+.sf-col[data-role^='w'] { background: var(--panel); border-right: 1px solid var(--l1); overflow: hidden; }
 [data-role='sidebar'] { padding: 10px 6px; font-family: var(--sans); font-size: 13px; letter-spacing: -0.005em; }
 [data-role='sidebar'] .sf-item { min-height: 24px; padding: 0 8px; gap: 6px; border-radius: 6px; color: var(--t2); transition: background-color 0.12s var(--ease), color 0.12s var(--ease), box-shadow 0.12s var(--ease); }
 [data-role='sidebar'] .sf-item:hover { color: var(--t1); background-color: var(--l1); }
@@ -189,6 +189,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 				let item = s.item.strip_prefix(&format!("{}.", s.id)).unwrap_or(&s.item);
 				tree_pick(&grid, item, &mut nvim)?;
 			},
+			// A double-click also sends `activate`. The first click already acted, and the menu arm
+			// below would read the digits that end a file name as one of its items.
+			Some(Input::Event(Event::Activate(s))) if tree_id(&grid).is_some_and(|id| s.id == id) => {},
 			// A click on a picker row: select that entry, and open it on a double-click.
 			Some(Input::Event(ev @ (Event::Select(_) | Event::Activate(_)))) if matches!(&ev, Event::Select(s) | Event::Activate(s) if s.id == PICK_ID) => {
 				let (Event::Select(s) | Event::Activate(s)) = &ev else { unreachable!() };
@@ -498,6 +501,10 @@ fn screen_css(splits: &[(u64, grid::Win)], rows: usize, cell: (f64, f64)) -> Str
 		let (left, top) = (win.col as f64 * cw, win.row as f64 * ch);
 		let (w, h) = (win.w as f64 * cw, win.h as f64 * ch);
 		let _ = writeln!(css, "[data-role='w{g}'] {{ position: absolute; left: {left}px; top: {top}px; width: {w}px; height: {h}px; }}");
+		// A sidebar's list scrolls inside its split's box, below its padding, and Tern keeps the
+		// selected row in view there. Tern gives the list an inline `max-height` of its own from
+		// `max_lines`, so the box's bound needs `!important` to win.
+		let _ = writeln!(css, "[data-role='w{g}'] .sf-list-scroll {{ max-height: {}px !important; }}", (h - 20.0).max(0.0));
 	}
 	css
 }
@@ -527,7 +534,14 @@ fn tree_node(g: u64, tree: &grid::Tree) -> ui::Node {
 		label.push(ui::span(row.label.as_str()));
 		ui::item(label).key(row.id.as_str())
 	});
-	let list = ui::list().key("tree").role("sidebar").selected(format!("{id}.{}", tree.selected)).children(items);
+	// `max_lines` makes the list a scroller of its own, which is what brings the selected row into
+	// view. Its real bound is the box, set by `screen_css`, so this one only has to be larger.
+	let list = ui::list()
+		.key("tree")
+		.role("sidebar")
+		.max_lines(10_000)
+		.selected(format!("{id}.{}", tree.selected))
+		.children(items);
 	ui::col().key(format!("w{g}")).role(format!("w{g}")).gap(ui::Gap::None).child(list).into()
 }
 
