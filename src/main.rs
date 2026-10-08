@@ -77,6 +77,18 @@ const PALETTE_CSS: &str = "
 [data-role^='w'] .sf-t-code { background: var(--tv-cur, var(--accent)); color: var(--page); border: 0; box-shadow: none; border-radius: 0; padding: 0; font: inherit; }
 [data-role='float-text'] { padding: 0; background: none; box-shadow: none; }
 [data-role='float-text'] .sf-caret { display: none; }
+/* The sidebar picker: Tern's own look, a panel with a hairline, Geist rows that tint and take the
+   accent bar when selected, and a bold root. Instant on press, 120ms on hover (Tern's `--ease`). */
+.sf-col[data-role^='w'] { background: var(--panel); border-right: 1px solid var(--l1); overflow: hidden; }
+[data-role='sidebar'] { padding: 10px 6px; font-family: var(--sans); font-size: 13px; letter-spacing: -0.005em; }
+[data-role='sidebar'] .sf-item { min-height: 24px; padding: 0 8px; gap: 6px; border-radius: 6px; color: var(--t2); transition: background-color 0.12s var(--ease), color 0.12s var(--ease), box-shadow 0.12s var(--ease); }
+[data-role='sidebar'] .sf-item:hover { color: var(--t1); background-color: var(--l1); }
+[data-role='sidebar'] .sf-item:active { background-color: var(--l2); transition-duration: 0s; }
+[data-role='sidebar'] .sf-item.sel, [data-role='sidebar'] .sf-item.sel:hover { color: var(--t1); background-color: light-dark(rgb(from var(--accent) r g b/10%), rgb(from var(--accent) r g b/16%)); box-shadow: inset 2px 0 0 var(--accent); }
+[data-role='sidebar'] .sf-item:first-child { color: var(--t1); font-weight: 600; margin-bottom: 4px; }
+/* The picker sheet: Tern's `--panel`, not the grey glass its own sheet uses. It needs `!important`:
+   the same rule without it did not win against Tern's. */
+.sf-picker .pk-sheet.f-list { background: var(--panel) !important; }
 ";
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -107,6 +119,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 	nvim.notify("nvim_exec_lua", vec![include_str!("status.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("float.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("telescope.lua").into(), Value::Array(vec![])])?;
+	nvim.notify("nvim_exec_lua", vec![include_str!("snacks.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("keys.lua").into(), Value::Array(vec![])])?;
 	let mut grid = Grid::default();
 	// The field Tern's caret sits in, the cell box Tern draws with, and the sheet that places the
@@ -169,6 +182,16 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 					nvim.notify(set, vec![handle.clone()])?;
 				}
 			},
+			// A click on a sidebar row: the row is selected and confirmed in the picker, which opens
+			// a file and toggles a directory.
+			Some(Input::Event(Event::Select(s))) if tree_id(&grid).is_some_and(|id| s.id == id) => {
+				// The item arrives as `<list id>.<row key>`.
+				let item = s.item.strip_prefix(&format!("{}.", s.id)).unwrap_or(&s.item);
+				tree_pick(&grid, item, &mut nvim)?;
+			},
+			// A double-click also sends `activate`. The first click already acted, and the menu arm
+			// below would read the digits that end a file name as one of its items.
+			Some(Input::Event(Event::Activate(s))) if tree_id(&grid).is_some_and(|id| s.id == id) => {},
 			// A click on a picker row: select that entry, and open it on a double-click.
 			Some(Input::Event(ev @ (Event::Select(_) | Event::Activate(_)))) if matches!(&ev, Event::Select(s) | Event::Activate(s) if s.id == PICK_ID) => {
 				let (Event::Select(s) | Event::Activate(s)) = &ev else { unreachable!() };
@@ -209,6 +232,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 						let icons = grid.icons.values().filter_map(|(_, fg)| *fg);
 						colors.extend(grid.status.iter().chain(&grid.crumbs).filter_map(|c| c.fg).chain(icons));
 						colors.extend(grid.palette().into_iter().chain(grid.sel));
+						colors.extend(grid.tree.iter().flat_map(|t| t.rows.iter().filter_map(|r| r.color)));
+						colors.extend(grid.pick.iter().flat_map(|p| p.styled.values().flatten().filter_map(|(_, fg, _)| *fg)));
 						if colors.len() != n || sel != grid.sel {
 							sel = grid.sel;
 							session.stylesheet(sf, "colors", Some(&colors_css(&colors, grid.sel)))?;
@@ -260,6 +285,10 @@ fn view(grid: &Grid) -> View {
 	let windows: Vec<ui::Node> = splits
 		.iter()
 		.map(|(g, win)| {
+			// The split a sidebar picker keeps is its list, drawn as a tree in place of the text.
+			if let Some(tree) = grid.tree.as_ref().filter(|t| grid::handle_id(&win.handle) == Some(t.window)) {
+				return tree_node(*g, tree);
+			}
 			let cursor = (*g == cg).then(|| (grid.offset(*g, cr, cc), grid.offset(*g, cr, cc + 1)));
 			editor(grid, *g, win.h, cursor, block, &format!("w{g}")).into()
 		})
@@ -350,11 +379,19 @@ fn view(grid: &Grid) -> View {
 		let items: Vec<ui::PickerItem> = p
 			.rows
 			.iter()
-			.map(|(id, text)| {
+			.map(|(id, text)| match p.styled.get(id).filter(|runs| !runs.is_empty()) {
+				// A Snacks row arrives colored: its icon, its directory and file, and the characters
+				// the query matched, in the colors nvim gives them.
+				Some(runs) => {
+					let label: Vec<ui::Span> = runs.iter().flat_map(|(t, fg, bold)| spans(t, *fg, *bold)).collect();
+					ui::PickerItem::new(id.as_str(), label)
+				},
 				// A row's text starts with its devicon glyph, which Tern has no name for. `mono`
 				// splits what is left on the last `/`, so the directory dims and the name stands out.
-				let text = text.trim_start_matches(|c| matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..)).trim_start();
-				ui::PickerItem { mono: Some(true), ..ui::PickerItem::new(id.as_str(), text) }
+				None => {
+					let text = text.trim_start_matches(|c| matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..)).trim_start();
+					ui::PickerItem { mono: Some(true), ..ui::PickerItem::new(id.as_str(), text) }
+				},
 			})
 			.collect();
 		let order: Vec<ui::OrderEntry> = p.rows.iter().map(|(id, _)| ui::OrderEntry::Item(id.clone())).collect();
@@ -463,16 +500,66 @@ fn screen_css(splits: &[(u64, grid::Win)], rows: usize, cell: (f64, f64)) -> Str
 	for (g, win) in splits {
 		let (left, top) = (win.col as f64 * cw, win.row as f64 * ch);
 		let (w, h) = (win.w as f64 * cw, win.h as f64 * ch);
-		let _ = writeln!(css, "[data-role='w{g}'] {{ left: {left}px; top: {top}px; width: {w}px; height: {h}px; }}");
+		let _ = writeln!(css, "[data-role='w{g}'] {{ position: absolute; left: {left}px; top: {top}px; width: {w}px; height: {h}px; }}");
+		// A sidebar's list scrolls inside its split's box, below its padding, and Tern keeps the
+		// selected row in view there. Tern gives the list an inline `max-height` of its own from
+		// `max_lines`, so the box's bound needs `!important` to win.
+		let _ = writeln!(css, "[data-role='w{g}'] .sf-list-scroll {{ max-height: {}px !important; }}", (h - 20.0).max(0.0));
 	}
 	css
 }
+
+/// The node id of the list of the sidebar picker, when one is open and its split is on screen.
+fn tree_id(grid: &Grid) -> Option<String> {
+	let tree = grid.tree.as_ref()?;
+	let (g, _) = grid.splits().into_iter().find(|(_, w)| grid::handle_id(&w.handle) == Some(tree.window))?;
+	Some(format!("{}.tree", win_id(g)))
+}
+
+fn tree_pick(grid: &Grid, id: &str, nvim: &mut Nvim) -> Result<(), Box<dyn Error>> {
+	if let Some(row) = grid.tree.as_ref().and_then(|t| t.rows.iter().find(|r| r.id == id)) {
+		nvim.notify("nvim_exec_lua", vec!["neotern_tree_pick(...)".into(), Value::Array(vec![row.index.into()])])?;
+	}
+	Ok(())
+}
+
+/// The sidebar picker's rows as a native list in the box nvim gives its split: each row is
+/// indented by its depth and starts with the icon Snacks draws, and the row under the picker's
+/// cursor is the selected one.
+fn tree_node(g: u64, tree: &grid::Tree) -> ui::Node {
+	let id = format!("{}.tree", win_id(g));
+	let items = tree.rows.iter().map(|row| {
+		let mut label = spans(&format!("{}{} ", "\u{2003}".repeat(row.depth), row.glyph), row.color, false);
+		label.push(ui::span(row.label.as_str()));
+		ui::item(label).key(row.id.as_str())
+	});
+	// `max_lines` makes the list a scroller of its own, which is what brings the selected row into
+	// view. Its real bound is the box, set by `screen_css`, so this one only has to be larger.
+	let list = ui::list()
+		.key("tree")
+		.role("sidebar")
+		.max_lines(10_000)
+		.selected(format!("{id}.{}", tree.selected))
+		.children(items);
+	ui::col().key(format!("w{g}")).role(format!("w{g}")).gap(ui::Gap::None).child(list).into()
+}
+
+/// A run color past the RGB range names a Tern token instead (`snacks.lua` sends these): the dim
+/// text of a directory, and the characters a query matched. They read on the sheet's own
+/// background in either theme, where nvim's colors are made for nvim's.
+const TOKEN_DIM: u32 = 0x100_0001;
+const TOKEN_MATCH: u32 = 0x100_0002;
 
 /// nvim text as spans: its color is the token `c<rrggbb>`, which `colors_css` defines; Nerd Font
 /// glyphs (Private Use Area) get the `icon` token. Tern draws a span with no known token as bare
 /// text, which takes no color, so each also gets `mono` (these strips are mono already).
 fn spans(text: &str, fg: Option<u32>, bold: bool) -> Vec<ui::Span> {
-	let mut style = fg.map(|fg| format!("c{fg:06x} mono")).unwrap_or_default();
+	let mut style = match fg {
+		Some(TOKEN_DIM) => "ntdim mono".to_owned(),
+		Some(TOKEN_MATCH) => "ntmatch mono".to_owned(),
+		Some(fg) => format!("c{fg:06x} mono"),
+		None => String::new(),
+	};
 	if bold {
 		style += " strong";
 	}
@@ -491,11 +578,20 @@ fn spans(text: &str, fg: Option<u32>, bold: bool) -> Vec<ui::Span> {
 /// The sheet that gives each color token its color: `--sf-p-<token>` is the color Tern puts on a
 /// span with an unknown token.
 fn colors_css(colors: &BTreeSet<u32>, sel: Option<u32>) -> String {
-	let mut vars: String = colors.iter().map(|c| format!("--sf-p-c{c:06x}: #{c:06x}; ")).collect();
+	let mut vars: String = colors.iter().filter(|c| **c <= 0xff_ffff).map(|c| format!("--sf-p-c{c:06x}: #{c:06x}; ")).collect();
+	// The picker's dim and match runs take Tern's own colors, which follow its theme.
+	vars += "--sf-p-ntdim: var(--t3); --sf-p-ntmatch: var(--accent-ink); ";
 	if let Some(sel) = sel {
 		let _ = write!(vars, "--nt-sel: #{sel:06x}; ");
 	}
-	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor {{ {vars}}}")
+	// On the sheet, nvim's colors are blended a quarter into Tern's text color, so a pale icon still
+	// reads on the light theme.
+	let tint: String = colors
+		.iter()
+		.filter(|c| **c <= 0xff_ffff)
+		.map(|c| format!("--sf-p-c{c:06x}: color-mix(in srgb, #{c:06x} 75%, var(--t1)); "))
+		.collect();
+	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor, [data-role='sidebar'], [data-id='layer.pick'] {{ {vars}}}\n[data-id='layer.pick'] {{ {tint}}}")
 }
 
 /// A message: one line is a toast, more is a card at the bottom that stays until a key.

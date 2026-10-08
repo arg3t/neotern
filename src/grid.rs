@@ -62,6 +62,8 @@ pub struct Grid {
 	pub doc:      Option<String>,
 	/// The Telescope picker while one is open, from `telescope.lua`.
 	pub pick:     Option<Pick>,
+	/// The sidebar picker (Snacks' explorer) while one is open, from `snacks.lua`.
+	pub tree:     Option<Tree>,
 	/// which-key's follow-up keys while it shows, from `keys.lua`: the keys pressed so far, then
 	/// `(key, description, is a group)` per row.
 	pub keys:     Option<(String, Vec<(String, String, bool)>)>,
@@ -99,6 +101,7 @@ impl Default for Grid {
 			sel:      None,
 			doc:      None,
 			pick:     None,
+			tree:     None,
 			keys:     None,
 			grids:    HashMap::new(),
 			wins:     HashMap::new(),
@@ -204,6 +207,8 @@ pub struct Pick {
 	pub prompt:  String,
 	/// The visible entries in order, each its id (the sorted-on text) and its display text.
 	pub rows:    Vec<(String, String)>,
+	/// The rows that come colored (Snacks'), by id: each run is its text, color and weight.
+	pub styled:  HashMap<String, Vec<(String, Option<u32>, bool)>>,
 	/// The selected row, 1-based; 0 when there is none.
 	pub sel:     usize,
 	/// The previewed text and its filetype.
@@ -216,6 +221,28 @@ pub struct Pick {
 	/// The buffer line `preview` starts at, and the line the previewer put the match on.
 	pub first:   i64,
 	pub at:      i64,
+}
+
+/// A sidebar picker drawn as a tree in the split nvim keeps for it, from `snacks.lua`.
+pub struct Tree {
+	/// The nvim window handle of that split.
+	pub window:   i64,
+	pub rows:     Vec<TreeRow>,
+	/// The id of the row the list's cursor is on.
+	pub selected: String,
+}
+
+/// One row of a [`Tree`].
+pub struct TreeRow {
+	/// The row's file, unique in the tree.
+	pub id:    String,
+	pub label: String,
+	/// Its place in the picker's list, which a click sends back.
+	pub index: i64,
+	pub depth: usize,
+	/// The icon Snacks draws for it, and that icon's color.
+	pub glyph: String,
+	pub color: Option<u32>,
 }
 
 /// The cursor shape of a mode (`:h guicursor`).
@@ -316,6 +343,14 @@ fn chunks(v: &Value) -> String {
 	v.as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|c| c.as_array()?.get(1)?.as_str()).collect()
 }
 
+/// An nvim window handle as a number: msgpack carries it as an ext value that holds an integer.
+pub fn handle_id(v: &Value) -> Option<i64> {
+	match v {
+		Value::Ext(_, bytes) => rmpv::decode::read_value(&mut bytes.as_slice()).ok()?.as_i64(),
+		other => other.as_i64(),
+	}
+}
+
 /// How long a message stays in the model: a bit more than the ~3s Tern shows a toast.
 const SHOWN: Duration = Duration::from_secs(4);
 
@@ -378,12 +413,21 @@ impl Grid {
 						});
 					},
 					"neotern_picker" => {
+						let rows = a.get(2).and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
 						self.pick = (a.len() >= 10).then(|| Pick {
 							title:   a[0].as_str().unwrap_or_default().into(),
 							prompt:  a[1].as_str().unwrap_or_default().into(),
-							rows:    a[2].as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|r| {
-								let [id, text] = r.as_array()?.as_slice() else { return None };
+							rows:    rows.iter().filter_map(|r| {
+								let [id, text, ..] = r.as_array()?.as_slice() else { return None };
 								Some((id.as_str()?.to_owned(), text.as_str()?.to_owned()))
+							}).collect(),
+							styled:  rows.iter().filter_map(|r| {
+								let [id, _, runs] = r.as_array()?.as_slice() else { return None };
+								let runs = runs.as_array()?.iter().filter_map(|run| {
+									let [text, fg, bold] = run.as_array()?.as_slice() else { return None };
+									Some((text.as_str()?.to_owned(), u32::try_from(int(fg)).ok(), bold.as_bool()?))
+								}).collect::<Vec<_>>();
+								Some((id.as_str()?.to_owned(), runs))
 							}).collect(),
 							sel:     int(&a[3]).max(0) as usize,
 							preview: a[4].as_str().unwrap_or_default().into(),
@@ -392,6 +436,23 @@ impl Grid {
 							pane:    a[7].as_bool().unwrap_or(false),
 							first:   int(&a[8]).max(1),
 							at:      int(&a[9]),
+						});
+					},
+					"neotern_tree" => {
+						self.tree = (a.len() >= 3).then(|| Tree {
+							window:   int(&a[0]),
+							rows:     a[1].as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|r| {
+								let [id, label, index, depth, glyph, color] = r.as_array()?.as_slice() else { return None };
+								Some(TreeRow {
+									id:    id.as_str()?.to_owned(),
+									label: label.as_str()?.to_owned(),
+									index: int(index),
+									depth: int(depth).max(0) as usize,
+									glyph: glyph.as_str()?.to_owned(),
+									color: u32::try_from(int(color)).ok(),
+								})
+							}).collect(),
+							selected: a[2].as_str().unwrap_or_default().into(),
 						});
 					},
 					"neotern_keys" => {

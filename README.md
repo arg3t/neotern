@@ -13,7 +13,7 @@ gone.
 > yet. Expect sharp edges, missing cases and changing internals.
 
 It is also **highly specialized for my dotfiles**: it bridges the exact plugins I run
-(blink.cmp, Telescope, lualine, barbecue, which-key) by wrapping their internals, and it assumes my
+(blink.cmp, Telescope, Snacks, lualine, barbecue, which-key) by wrapping their internals, and it assumes my
 options. Suggestions, issues and patches that generalize it are very welcome.
 
 ## Features
@@ -34,9 +34,12 @@ options. Suggestions, issues and patches that generalize it are very welcome.
   [blink.cmp](https://github.com/Saghen/blink.cmp)'s own menu and docs through the same path.
 
   ![Completion](docs/img/completion.png)
-- **Telescope is a native picker sheet** ([telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)):
+- **Telescope and Snacks pickers are a native picker sheet** ([telescope.nvim](https://github.com/nvim-telescope/telescope.nvim),
+  [snacks.nvim](https://github.com/folke/snacks.nvim)):
   a search head, the entries with a dim directory, and a preview of highlighted code with line
-  numbers and a mark on the matched line. A click selects, a double click opens.
+  numbers and a mark on the matched line. A click selects, a double click opens. The Snacks
+  explorer stays a sidebar: its split keeps its place in the layout, and Tern draws the tree in it
+  as a native list with the file icons, where a click opens a file or toggles a directory.
 
   ![Telescope](docs/img/telescope.png)
 - **Hover and signature help are markdown cards**, with highlighted code blocks, from
@@ -100,6 +103,7 @@ Four source files and five Lua bridges, about 1500 lines:
 | `src/main.rs` | The Tern session: the view, the stylesheets, the keys, the mouse. |
 | `src/blink.lua` | blink.cmp's menu and docs as `popupmenu_*` events. |
 | `src/telescope.lua` | Telescope's prompt, entries and preview as a picker. |
+| `src/snacks.lua` | Snacks' prompt, entries and preview as a picker. |
 | `src/status.lua` | lualine, barbecue and the devicons, every 100 ms. |
 | `src/float.lua` | Hover and signature help as markdown. |
 | `src/keys.lua` | which-key's follow-up keys. |

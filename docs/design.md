@@ -79,6 +79,43 @@ arguments and exits with its status.
   selects a row and a double click opens it. It also sets `sorting_strategy = 'ascending'`, so the
   best match is the first row and `<Down>` walks down, and `preview_cutoff = 0`, because the sheet
   always has room.
+- Snacks: after attach, neotern runs `src/snacks.lua`, which feeds the same `picker` sheet from
+  snacks.nvim's picker. A Snacks picker is four floats (a backdrop box, the input, the list and
+  the preview), so it hides all of them and sends the state on each change: the title, the
+  input's text, the list's rows around the cursor (up to 100, formatted by `list:format`), the
+  selection, and the preview buffer's lines around the matched line. The file type comes from the
+  item's file, because Snacks leaves its own `snacks_picker_preview` on the buffer. Each row also
+  carries colored runs (`{ text, color, bold }`) built from the text and extmarks `list:format`
+  returns: a highlight group over a byte range, and the icon as virtual text laid over the spaces
+  that hold its place. A later extmark wins, so the characters a query matched show over the file
+  name. `main.rs` draws the runs as spans. nvim's colors assume nvim's background, not the sheet's,
+  so two kinds of run name a Tern token instead of an RGB value: the dim directory
+  (`SnacksPickerDir` and its kin, `--t3`) and the matched characters (`SnacksPickerMatch`,
+  `--accent-ink`). Every other color is blended a quarter of the way into `--t1` inside the
+  sheet, which deepens a pale icon on the light theme and lifts it on the dark one. A row without
+  runs (Telescope's) is plain text.
+  A click selects a row (`list:_move`) and a double click runs the `confirm` action. The sheet
+  takes over `neotern_pick` and passes the call to Telescope's when no Snacks picker is open.
+  Only a floating layout (`layout.root.opts.position == 'float'`) becomes a sheet. A reversed
+  layout (Snacks' `telescope` one) puts the best match last and flips Up and Down, so the sheet
+  turns `list.reverse` off: it lists the best match first, and the keys step the way the rows run.
+  A sidebar and a sheet can be open together (the explorer stays while a files picker opens), so
+  each is tracked on its own: a click goes to the picker that owns that element, and closing one
+  clears only its own redraw.
+  A sidebar layout (`left` or `right`, the explorer) is a split with two floats inside it. The
+  split stays, since nvim keeps it in the layout and `screen_css` places it, and the floats are
+  hidden. The picker sends a `neotern_tree` redraw with the split's window handle and a row per
+  list item: its file, name, list index, depth and the icon Snacks draws with its color. `main.rs`
+  draws those rows as a Tern `list` (indented by depth, icon first) in that split's box instead
+  of the window's text. A click on a row sends its list index to `neotern_tree_pick`, which
+  selects it and runs `confirm`: a file opens and a directory toggles. The picker's list keeps
+  the focus, so the explorer's own keys (`j`, `k`, `l`, `h`, `a`, `d`) still work. The picker's
+  cursor row is the list's `selected` item (its id is `<list id>.<row key>`), so Tern's own
+  selection style applies: an accent tint and bar. The stylesheet sets the rest in Tern's tokens
+  (`--panel`, `--l1`, `--t2`, `--sans`): rows are 24px, rounded and 120ms to hover, instant on
+  press, with a bold root. The icon colors are nvim's, sent as `colors` tokens. The list is a
+  scroller of its own (`max_lines`), bounded to the split's box by `screen_css`, so Tern keeps the
+  cursor row in view. Its bound needs `!important`, because Tern sets an inline `max-height`.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
@@ -134,6 +171,11 @@ arguments and exits with its status.
   not virtualized, because Tern's virtual rows got a 44 px pitch for 22 px rows. The blink.cmp
   bridge wraps blink v1 internals (`completion.windows.menu`, `windows.documentation`), so a
   blink rewrite can break it. blink's `scroll_documentation_*` keys do nothing.
+- Snacks: Escape in the input first leaves insert mode and a second one closes, as in Snacks, so
+  the sheet's `esc` button needs two clicks. The sidebar list is flat (indent and icons, no
+  chevrons or guides), shows at most 2000 rows, and its search input is hidden. The bridge wraps
+  Snacks internals (`snacks.picker.core.{picker,list,preview}`, `list:_move`, `list:format`), so
+  a Snacks rewrite can break it.
 
 Planned: `ext_messages` (toasts),
 `ext_tabline` (tabs), `ext_multigrid` floats (overlays), and a Tern plugin with a
