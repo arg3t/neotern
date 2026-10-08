@@ -79,6 +79,15 @@ arguments and exits with its status.
   selects a row and a double click opens it. It also sets `sorting_strategy = 'ascending'`, so the
   best match is the first row and `<Down>` walks down, and `preview_cutoff = 0`, because the sheet
   always has room.
+- Snacks: after attach, neotern runs `src/snacks.lua`, which feeds the same `picker` sheet from
+  snacks.nvim's picker. A Snacks picker is four floats (a backdrop box, the input, the list and
+  the preview), so it hides all of them and sends the state on each change: the title, the
+  input's text, the list's rows around the cursor (up to 100, formatted by `list:format`), the
+  selection, and the preview buffer's lines around the matched line. The file type comes from the
+  item's file, because Snacks leaves its own `snacks_picker_preview` on the buffer. A click
+  selects a row (`list:_move`) and a double click runs the `confirm` action. The sheet takes over
+  `neotern_pick` and passes the call to Telescope's when no Snacks picker is open.
+  Only a floating layout (`layout.root.opts.position == 'float'`) becomes a sheet.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
@@ -134,6 +143,11 @@ arguments and exits with its status.
   not virtualized, because Tern's virtual rows got a 44 px pitch for 22 px rows. The blink.cmp
   bridge wraps blink v1 internals (`completion.windows.menu`, `windows.documentation`), so a
   blink rewrite can break it. blink's `scroll_documentation_*` keys do nothing.
+- Snacks: Escape in the input first leaves insert mode and a second one closes, as in Snacks, so
+  the sheet's `esc` button needs two clicks. A sidebar picker (the explorer) is a split with
+  floats inside it, which is not bridged and still draws as cards at the caret. The bridge wraps
+  Snacks internals (`snacks.picker.core.{picker,list,preview}`, `list:_move`, `list:format`), so
+  a Snacks rewrite can break it.
 
 Planned: `ext_messages` (toasts),
 `ext_tabline` (tabs), `ext_multigrid` floats (overlays), and a Tern plugin with a

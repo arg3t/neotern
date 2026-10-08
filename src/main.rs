@@ -107,6 +107,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 	nvim.notify("nvim_exec_lua", vec![include_str!("status.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("float.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("telescope.lua").into(), Value::Array(vec![])])?;
+	nvim.notify("nvim_exec_lua", vec![include_str!("snacks.lua").into(), Value::Array(vec![])])?;
 	nvim.notify("nvim_exec_lua", vec![include_str!("keys.lua").into(), Value::Array(vec![])])?;
 	let mut grid = Grid::default();
 	// The field Tern's caret sits in, the cell box Tern draws with, and the sheet that places the
