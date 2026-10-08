@@ -86,6 +86,9 @@ const PALETTE_CSS: &str = "
 [data-role='sidebar'] .sf-item:active { background-color: var(--l2); transition-duration: 0s; }
 [data-role='sidebar'] .sf-item.sel, [data-role='sidebar'] .sf-item.sel:hover { color: var(--t1); background-color: light-dark(rgb(from var(--accent) r g b/10%), rgb(from var(--accent) r g b/16%)); box-shadow: inset 2px 0 0 var(--accent); }
 [data-role='sidebar'] .sf-item:first-child { color: var(--t1); font-weight: 600; margin-bottom: 4px; }
+/* The picker sheet: Tern's `--panel`, not the grey glass its own sheet uses. It needs `!important`:
+   the same rule without it did not win against Tern's. */
+.sf-picker .pk-sheet.f-list { background: var(--panel) !important; }
 ";
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
