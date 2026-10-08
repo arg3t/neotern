@@ -239,7 +239,6 @@ pub struct TreeRow {
 	pub label: String,
 	/// Its place in the picker's list, which a click sends back.
 	pub index: i64,
-	/// How many parents the row has.
 	pub depth: usize,
 	/// The icon Snacks draws for it, and that icon's color.
 	pub glyph: String,

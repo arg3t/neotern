@@ -516,7 +516,6 @@ fn tree_id(grid: &Grid) -> Option<String> {
 	Some(format!("{}.tree", win_id(g)))
 }
 
-/// Selects and confirms the row `id` of the sidebar picker.
 fn tree_pick(grid: &Grid, id: &str, nvim: &mut Nvim) -> Result<(), Box<dyn Error>> {
 	if let Some(row) = grid.tree.as_ref().and_then(|t| t.rows.iter().find(|r| r.id == id)) {
 		nvim.notify("nvim_exec_lua", vec!["neotern_tree_pick(...)".into(), Value::Array(vec![row.index.into()])])?;
@@ -585,9 +584,8 @@ fn colors_css(colors: &BTreeSet<u32>, sel: Option<u32>) -> String {
 	if let Some(sel) = sel {
 		let _ = write!(vars, "--nt-sel: #{sel:06x}; ");
 	}
-	// On the sheet's own background nvim's colors are blended a quarter of the way into Tern's text
-	// color, which darkens them on the light theme and lightens them on the dark one, so a pale icon
-	// or a dim token still reads.
+	// On the sheet, nvim's colors are blended a quarter into Tern's text color, so a pale icon still
+	// reads on the light theme.
 	let tint: String = colors
 		.iter()
 		.filter(|c| **c <= 0xff_ffff)

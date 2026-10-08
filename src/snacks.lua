@@ -1,12 +1,8 @@
--- neotern runs this once after attach. Snacks draws a picker in floats of cells (a backdrop box, the
--- input, the list and the preview); Tern has native elements for that. A hidden window stays valid,
--- so the floats are hidden and Snacks keeps filling its buffers. Two shapes:
---  * A floating layout becomes Tern's picker sheet, as `telescope.lua` does: a `neotern_picker`
---    redraw, `{ title, prompt, rows, selected, preview, filetype, total, pane, first, at }`, or `{}`
---    when the picker closes.
---  * A sidebar layout (the explorer) lives in a split that nvim keeps in the layout, so Tern draws
---    its list as a native list in that split: a `neotern_tree` redraw, `{ window, rows, selected }`
---    with a row `{ id, label, index, depth, glyph, color }`, or `{}` when it closes.
+-- neotern runs this once after attach. A Snacks picker is floats of cells (backdrop, input, list,
+-- preview), so they are hidden (a hidden window stays valid and Snacks keeps filling its buffers)
+-- and the state goes to Tern as native elements:
+--  * a floating layout is the picker sheet, through the `neotern_picker` redraw `telescope.lua` sends;
+--  * a sidebar layout (the explorer) is a list in the split nvim keeps for it, through `neotern_tree`.
 -- ponytail: wraps snacks internals (`snacks.picker.core.{picker,list,preview}`, `list:_move`,
 -- `list:format`); a Snacks rewrite breaks it, like `blink.lua` does for blink.
 local MAX_ROWS = 100
@@ -23,7 +19,7 @@ end
 
 --- 'sheet' for a floating picker, 'tree' for a sidebar one, nil when it is closed or not shown.
 local function kind(p)
-  if not (p and p.layout and not p.closed and p.shown and p.list and p.list.win) then return nil end
+  if not (p and p.layout and not p.closed and p.shown and p.list and p.list.win) then return end
   local root = p.layout.root
   local position = root and root.opts and root.opts.position
   if position == 'float' then return 'sheet' end
@@ -171,9 +167,8 @@ local function preview_of(p)
   return table.concat(lines, '\n'), ft, from, at
 end
 
---- The list as rows `{ id, label, index, depth, glyph, color }`: the id is the row's file, `index`
---- is its place in the list, and the glyph is the icon Snacks draws, with its foreground color (-1
---- for none).
+--- The list as rows `{ id, label, index, depth, glyph, color }`: `index` is the row's place in the
+--- list and `color` is -1 for none.
 local function tree_of(p)
   local list = p.list
   local icons = p.opts.icons.files
@@ -269,8 +264,8 @@ local function hook()
   })
 end
 
--- A click on a Tern row: row `i` (1-based) is selected, and accepted on a double-click. Rows are
--- shared with Telescope's sheet, so whatever else answers (`telescope.lua`) keeps the call.
+-- A click on a sheet row, accepted on a double-click. Telescope's sheet shares the call, so it keeps
+-- it when no Snacks sheet is open.
 local other = _G.neotern_pick
 function _G.neotern_pick(i, accept)
   local w = windows.sheet
