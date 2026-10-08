@@ -62,6 +62,8 @@ pub struct Grid {
 	pub doc:      Option<String>,
 	/// The Telescope picker while one is open, from `telescope.lua`.
 	pub pick:     Option<Pick>,
+	/// The sidebar picker (Snacks' explorer) while one is open, from `snacks.lua`.
+	pub tree:     Option<Tree>,
 	/// which-key's follow-up keys while it shows, from `keys.lua`: the keys pressed so far, then
 	/// `(key, description, is a group)` per row.
 	pub keys:     Option<(String, Vec<(String, String, bool)>)>,
@@ -99,6 +101,7 @@ impl Default for Grid {
 			sel:      None,
 			doc:      None,
 			pick:     None,
+			tree:     None,
 			keys:     None,
 			grids:    HashMap::new(),
 			wins:     HashMap::new(),
@@ -218,6 +221,29 @@ pub struct Pick {
 	pub at:      i64,
 }
 
+/// A sidebar picker drawn as a tree in the split nvim keeps for it, from `snacks.lua`.
+pub struct Tree {
+	/// The nvim window handle of that split.
+	pub window:   i64,
+	pub rows:     Vec<TreeRow>,
+	/// The id of the row the list's cursor is on.
+	pub selected: String,
+}
+
+/// One row of a [`Tree`].
+pub struct TreeRow {
+	/// The row's file, unique in the tree.
+	pub id:    String,
+	pub label: String,
+	/// Its place in the picker's list, which a click sends back.
+	pub index: i64,
+	/// How many parents the row has.
+	pub depth: usize,
+	/// The icon Snacks draws for it, and that icon's color.
+	pub glyph: String,
+	pub color: Option<u32>,
+}
+
 /// The cursor shape of a mode (`:h guicursor`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Shape {
@@ -316,6 +342,14 @@ fn chunks(v: &Value) -> String {
 	v.as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|c| c.as_array()?.get(1)?.as_str()).collect()
 }
 
+/// An nvim window handle as a number: msgpack carries it as an ext value that holds an integer.
+pub fn handle_id(v: &Value) -> Option<i64> {
+	match v {
+		Value::Ext(_, bytes) => rmpv::decode::read_value(&mut bytes.as_slice()).ok()?.as_i64(),
+		other => other.as_i64(),
+	}
+}
+
 /// How long a message stays in the model: a bit more than the ~3s Tern shows a toast.
 const SHOWN: Duration = Duration::from_secs(4);
 
@@ -392,6 +426,23 @@ impl Grid {
 							pane:    a[7].as_bool().unwrap_or(false),
 							first:   int(&a[8]).max(1),
 							at:      int(&a[9]),
+						});
+					},
+					"neotern_tree" => {
+						self.tree = (a.len() >= 3).then(|| Tree {
+							window:   int(&a[0]),
+							rows:     a[1].as_array().map_or(&[][..], Vec::as_slice).iter().filter_map(|r| {
+								let [id, label, index, depth, glyph, color] = r.as_array()?.as_slice() else { return None };
+								Some(TreeRow {
+									id:    id.as_str()?.to_owned(),
+									label: label.as_str()?.to_owned(),
+									index: int(index),
+									depth: int(depth).max(0) as usize,
+									glyph: glyph.as_str()?.to_owned(),
+									color: u32::try_from(int(color)).ok(),
+								})
+							}).collect(),
+							selected: a[2].as_str().unwrap_or_default().into(),
 						});
 					},
 					"neotern_keys" => {

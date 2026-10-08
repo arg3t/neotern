@@ -1,12 +1,16 @@
--- neotern runs this once after attach. Snacks draws its picker in four floats of cells (a backdrop
--- box, the input, the list and the preview); Tern has a native picker sheet. So hide Snacks'
--- windows and send its state as the same `neotern_picker` redraw `telescope.lua` sends:
--- `{ title, prompt, rows, selected, preview, filetype, total, pane, first, at }`, or `{}` when the
--- picker closes. A hidden window stays valid, so Snacks keeps filling its buffers.
--- Only floating layouts become a sheet. A sidebar picker (the explorer) lives in a split.
+-- neotern runs this once after attach. Snacks draws a picker in floats of cells (a backdrop box, the
+-- input, the list and the preview); Tern has native elements for that. A hidden window stays valid,
+-- so the floats are hidden and Snacks keeps filling its buffers. Two shapes:
+--  * A floating layout becomes Tern's picker sheet, as `telescope.lua` does: a `neotern_picker`
+--    redraw, `{ title, prompt, rows, selected, preview, filetype, total, pane, first, at }`, or `{}`
+--    when the picker closes.
+--  * A sidebar layout (the explorer) lives in a split that nvim keeps in the layout, so Tern draws
+--    its list as a native list in that split: a `neotern_tree` redraw, `{ window, rows, selected }`
+--    with a row `{ id, label, index, depth, glyph, color }`, or `{}` when it closes.
 -- ponytail: wraps snacks internals (`snacks.picker.core.{picker,list,preview}`, `list:_move`,
 -- `list:format`); a Snacks rewrite breaks it, like `blink.lua` does for blink.
 local MAX_ROWS = 100
+local MAX_TREE = 2000
 
 local hooked, dirty, window
 
@@ -15,20 +19,28 @@ local function send(ev)
   if ui and ui.chan > 0 then vim.rpcnotify(ui.chan, 'redraw', ev, { 'flush', {} }) end
 end
 
---- A picker that is a float and not yet closed, the only kind the sheet draws.
-local function sheet(p)
-  if not (p and p.layout and not p.closed and p.shown and p.list and p.list.win) then return false end
+--- 'sheet' for a floating picker, 'tree' for a sidebar one, nil when it is closed or not shown.
+local function kind(p)
+  if not (p and p.layout and not p.closed and p.shown and p.list and p.list.win) then return nil end
   local root = p.layout.root
-  return root ~= nil and root.opts ~= nil and root.opts.position == 'float'
+  local position = root and root.opts and root.opts.position
+  if position == 'float' then return 'sheet' end
+  if position == 'left' or position == 'right' then return 'tree' end
 end
 
+--- Hides every float of the picker, and the backdrop each window dims what is behind it with. A
+--- split stays: nvim keeps it in the layout and Tern draws it.
 local function hide(p)
   local wins = { p.layout.root }
   vim.list_extend(wins, vim.tbl_values(p.layout.box_wins))
   vim.list_extend(wins, vim.tbl_values(p.layout.wins))
   for _, win in ipairs(wins) do
-    local id = win.win
-    if id and vim.api.nvim_win_is_valid(id) then pcall(vim.api.nvim_win_set_config, id, { hide = true }) end
+    for _, w in ipairs({ win, win.backdrop or false }) do
+      local id = w and w.win
+      if id and vim.api.nvim_win_is_valid(id) and vim.api.nvim_win_get_config(id).relative ~= '' then
+        pcall(vim.api.nvim_win_set_config, id, { hide = true })
+      end
+    end
   end
 end
 
@@ -71,16 +83,52 @@ local function preview_of(p)
   return table.concat(lines, '\n'), ft, from, at
 end
 
+--- The list as rows `{ id, label, index, depth, glyph, color }`: the id is the row's file, `index`
+--- is its place in the list, and the glyph is the icon Snacks draws, with its foreground color (-1
+--- for none).
+local function tree_of(p)
+  local list = p.list
+  local icons = p.opts.icons.files
+  local rows = {}
+  for idx = 1, math.min(list:count(), MAX_TREE) do
+    local item = list:get(idx)
+    if item then
+      Snacks.picker.util.resolve(item)
+      local file = item.file or item.text or ''
+      local depth, parent = 0, item.parent
+      while parent do
+        depth, parent = depth + 1, parent.parent
+      end
+      local glyph, hl = icons.dir_open, 'Directory'
+      if not (item.dir and item.open) then
+        glyph, hl = Snacks.util.icon(file, item.dir and 'directory' or 'file', { fallback = icons })
+      end
+      local fg = hl and vim.api.nvim_get_hl(0, { name = hl, link = false }).fg or -1
+      local label = vim.fn.fnamemodify(file, ':t')
+      rows[#rows + 1] = { file, label ~= '' and label or file, idx, depth, vim.trim(glyph or ''), fg }
+    end
+  end
+  local current = list:current()
+  return rows, current and (current.file or current.text) or ''
+end
+
 local function emit(p)
   if dirty then return end
   dirty = true
   vim.schedule(function()
     dirty = false
-    if not sheet(p) then return end
+    local shape = kind(p)
+    if not shape then return end
     hide(p)
+    window = { picker = p, first = 1, kind = shape }
+    if shape == 'tree' then
+      local rows, selected = tree_of(p)
+      send({ 'neotern_tree', { p.layout.root.win, rows, selected } })
+      return
+    end
     local rows, first, sel = rows_of(p)
     local preview, ft, from, at = preview_of(p)
-    window = { picker = p, first = first }
+    window.first = first
     send({ 'neotern_picker', { p.title or 'Find', p.input:get() or '', rows, sel, preview, ft,
       p:count(), p.preview ~= nil and p.preview.win ~= nil and p.preview.win:valid() or false, from, at } })
   end)
@@ -102,7 +150,7 @@ local function hook()
     end
   end
   wrap(Picker, 'show', function(self)
-    if sheet(self) then hide(self) end
+    if kind(self) then hide(self) end
     emit(self)
   end)
   wrap(Picker, 'update', function(self) emit(self) end)
@@ -111,11 +159,11 @@ local function hook()
   wrap(Preview, 'show', function(_, picker) emit(picker) end)
   local close = Picker.close
   Picker.close = function(self, ...)
-    local was = window and window.picker == self
+    local was = window and window.picker == self and window.kind
     close(self, ...)
     if was then
       window = nil
-      send({ 'neotern_picker', {} })
+      send({ was == 'tree' and 'neotern_tree' or 'neotern_picker', {} })
     end
   end
   vim.api.nvim_create_autocmd({ 'VimResized', 'WinResized' }, {
@@ -128,12 +176,21 @@ end
 local other = _G.neotern_pick
 function _G.neotern_pick(i, accept)
   local p = window and window.picker
-  if not (p and not p.closed and p.list) then
+  if not (p and not p.closed and p.list and window.kind == 'sheet') then
     if other then return other(i, accept) end
     return
   end
   p.list:_move(window.first + i - 1, true, true)
   if accept then p:action('confirm') end
+end
+
+-- A click on a tree row: the row at list index `i` is selected and confirmed, which opens a file
+-- and toggles a directory.
+function _G.neotern_tree_pick(i)
+  local p = window and window.picker
+  if not (p and not p.closed and p.list and window.kind == 'tree') then return end
+  p.list:_move(i, true, true)
+  p:action('confirm')
 end
 
 hook()

@@ -170,6 +170,13 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 					nvim.notify(set, vec![handle.clone()])?;
 				}
 			},
+			// A click on a sidebar row: the row is selected and confirmed in the picker, which opens
+			// a file and toggles a directory.
+			Some(Input::Event(Event::Select(s))) if tree_id(&grid).is_some_and(|id| s.id == id) => {
+				// The item arrives as `<list id>.<row key>`.
+				let item = s.item.strip_prefix(&format!("{}.", s.id)).unwrap_or(&s.item);
+				tree_pick(&grid, item, &mut nvim)?;
+			},
 			// A click on a picker row: select that entry, and open it on a double-click.
 			Some(Input::Event(ev @ (Event::Select(_) | Event::Activate(_)))) if matches!(&ev, Event::Select(s) | Event::Activate(s) if s.id == PICK_ID) => {
 				let (Event::Select(s) | Event::Activate(s)) = &ev else { unreachable!() };
@@ -261,6 +268,10 @@ fn view(grid: &Grid) -> View {
 	let windows: Vec<ui::Node> = splits
 		.iter()
 		.map(|(g, win)| {
+			// The split a sidebar picker keeps is its list, drawn as a tree in place of the text.
+			if let Some(tree) = grid.tree.as_ref().filter(|t| grid::handle_id(&win.handle) == Some(t.window)) {
+				return tree_node(*g, tree);
+			}
 			let cursor = (*g == cg).then(|| (grid.offset(*g, cr, cc), grid.offset(*g, cr, cc + 1)));
 			editor(grid, *g, win.h, cursor, block, &format!("w{g}")).into()
 		})
@@ -464,9 +475,37 @@ fn screen_css(splits: &[(u64, grid::Win)], rows: usize, cell: (f64, f64)) -> Str
 	for (g, win) in splits {
 		let (left, top) = (win.col as f64 * cw, win.row as f64 * ch);
 		let (w, h) = (win.w as f64 * cw, win.h as f64 * ch);
-		let _ = writeln!(css, "[data-role='w{g}'] {{ left: {left}px; top: {top}px; width: {w}px; height: {h}px; }}");
+		let _ = writeln!(css, "[data-role='w{g}'] {{ position: absolute; left: {left}px; top: {top}px; width: {w}px; height: {h}px; }}");
 	}
 	css
+}
+
+/// The node id of the list of the sidebar picker, when one is open and its split is on screen.
+fn tree_id(grid: &Grid) -> Option<String> {
+	let tree = grid.tree.as_ref()?;
+	let (g, _) = grid.splits().into_iter().find(|(_, w)| grid::handle_id(&w.handle) == Some(tree.window))?;
+	Some(format!("{}.tree", win_id(g)))
+}
+
+/// Selects and confirms the row `id` of the sidebar picker.
+fn tree_pick(grid: &Grid, id: &str, nvim: &mut Nvim) -> Result<(), Box<dyn Error>> {
+	if let Some(row) = grid.tree.as_ref().and_then(|t| t.rows.iter().find(|r| r.id == id)) {
+		nvim.notify("nvim_exec_lua", vec!["neotern_tree_pick(...)".into(), Value::Array(vec![row.index.into()])])?;
+	}
+	Ok(())
+}
+
+/// The sidebar picker's rows as a native list in the box nvim gives its split: each row is
+/// indented by its depth and starts with the icon Snacks draws, and the row under the picker's
+/// cursor is the selected one.
+fn tree_node(g: u64, tree: &grid::Tree) -> ui::Node {
+	let items = tree.rows.iter().map(|row| {
+		let mut label = spans(&format!("{}{} ", "\u{a0}\u{a0}".repeat(row.depth), row.glyph), row.color, false);
+		label.push(ui::span(row.label.as_str()));
+		ui::item(label).key(row.id.as_str())
+	});
+	let list = ui::list().key("tree").role("sidebar").selected(tree.selected.clone()).children(items);
+	ui::col().key(format!("w{g}")).role(format!("w{g}")).gap(ui::Gap::None).child(list).into()
 }
 
 /// nvim text as spans: its color is the token `c<rrggbb>`, which `colors_css` defines; Nerd Font

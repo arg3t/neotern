@@ -37,8 +37,9 @@ options. Suggestions, issues and patches that generalize it are very welcome.
 - **Telescope and Snacks pickers are a native picker sheet** ([telescope.nvim](https://github.com/nvim-telescope/telescope.nvim),
   [snacks.nvim](https://github.com/folke/snacks.nvim)):
   a search head, the entries with a dim directory, and a preview of highlighted code with line
-  numbers and a mark on the matched line. A click selects, a double click opens. Only the floating
-  Snacks layouts become a sheet; a sidebar picker such as the explorer is not bridged.
+  numbers and a mark on the matched line. A click selects, a double click opens. The Snacks
+  explorer stays a sidebar: its split keeps its place in the layout, and Tern draws the tree in it
+  as a native list with the file icons, where a click opens a file or toggles a directory.
 
   ![Telescope](docs/img/telescope.png)
 - **Hover and signature help are markdown cards**, with highlighted code blocks, from

@@ -88,6 +88,14 @@ arguments and exits with its status.
   selects a row (`list:_move`) and a double click runs the `confirm` action. The sheet takes over
   `neotern_pick` and passes the call to Telescope's when no Snacks picker is open.
   Only a floating layout (`layout.root.opts.position == 'float'`) becomes a sheet.
+  A sidebar layout (`left` or `right`, the explorer) is a split with two floats inside it. The
+  split stays, since nvim keeps it in the layout and `screen_css` places it, and the floats are
+  hidden. The picker sends a `neotern_tree` redraw with the split's window handle and a row per
+  list item: its file, name, list index, depth and the icon Snacks draws with its color. `main.rs`
+  draws those rows as a Tern `list` (indented by depth, icon first) in that split's box instead
+  of the window's text. A click on a row sends its list index to `neotern_tree_pick`, which
+  selects it and runs `confirm`: a file opens and a directory toggles. The picker's list keeps
+  the focus, so the explorer's own keys (`j`, `k`, `l`, `h`, `a`, `d`) still work.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.
@@ -144,8 +152,8 @@ arguments and exits with its status.
   bridge wraps blink v1 internals (`completion.windows.menu`, `windows.documentation`), so a
   blink rewrite can break it. blink's `scroll_documentation_*` keys do nothing.
 - Snacks: Escape in the input first leaves insert mode and a second one closes, as in Snacks, so
-  the sheet's `esc` button needs two clicks. A sidebar picker (the explorer) is a split with
-  floats inside it, which is not bridged and still draws as cards at the caret. The bridge wraps
+  the sheet's `esc` button needs two clicks. The sidebar list is flat (indent and icons, no
+  chevrons or guides), shows at most 2000 rows, and its search input is hidden. The bridge wraps
   Snacks internals (`snacks.picker.core.{picker,list,preview}`, `list:_move`, `list:format`), so
   a Snacks rewrite can break it.
 
