@@ -95,7 +95,11 @@ arguments and exits with its status.
   draws those rows as a Tern `list` (indented by depth, icon first) in that split's box instead
   of the window's text. A click on a row sends its list index to `neotern_tree_pick`, which
   selects it and runs `confirm`: a file opens and a directory toggles. The picker's list keeps
-  the focus, so the explorer's own keys (`j`, `k`, `l`, `h`, `a`, `d`) still work.
+  the focus, so the explorer's own keys (`j`, `k`, `l`, `h`, `a`, `d`) still work. The picker's
+  cursor row is the list's `selected` item (its id is `<list id>.<row key>`), so Tern's own
+  selection style applies: an accent tint and bar. The stylesheet sets the rest in Tern's tokens
+  (`--panel`, `--l1`, `--t2`, `--sans`): rows are 24px, rounded and 120ms to hover, instant on
+  press, with a bold root. The icon colors are nvim's, sent as `colors` tokens.
 - `g:neotern` is 1 before your config runs (`--cmd`), like `g:neovide`. Use it to skip plugins
   that also take over the command line or popup menu. For example, noice.nvim stops with an
   error when a UI uses `ext_cmdline`, so set `cond = not vim.g.neotern` on its lazy.nvim spec.

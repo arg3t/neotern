@@ -77,6 +77,15 @@ const PALETTE_CSS: &str = "
 [data-role^='w'] .sf-t-code { background: var(--tv-cur, var(--accent)); color: var(--page); border: 0; box-shadow: none; border-radius: 0; padding: 0; font: inherit; }
 [data-role='float-text'] { padding: 0; background: none; box-shadow: none; }
 [data-role='float-text'] .sf-caret { display: none; }
+/* The sidebar picker: Tern's own look, a panel with a hairline, Geist rows that tint and take the
+   accent bar when selected, and a bold root. Instant on press, 120ms on hover (Tern's `--ease`). */
+.sf-col[data-role^='w'] { background: var(--panel); border-right: 1px solid var(--l1); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--l3) transparent; }
+[data-role='sidebar'] { padding: 10px 6px; font-family: var(--sans); font-size: 13px; letter-spacing: -0.005em; }
+[data-role='sidebar'] .sf-item { min-height: 24px; padding: 0 8px; gap: 6px; border-radius: 6px; color: var(--t2); transition: background-color 0.12s var(--ease), color 0.12s var(--ease), box-shadow 0.12s var(--ease); }
+[data-role='sidebar'] .sf-item:hover { color: var(--t1); background-color: var(--l1); }
+[data-role='sidebar'] .sf-item:active { background-color: var(--l2); transition-duration: 0s; }
+[data-role='sidebar'] .sf-item.sel, [data-role='sidebar'] .sf-item.sel:hover { color: var(--t1); background-color: light-dark(rgb(from var(--accent) r g b/10%), rgb(from var(--accent) r g b/16%)); box-shadow: inset 2px 0 0 var(--accent); }
+[data-role='sidebar'] .sf-item:first-child { color: var(--t1); font-weight: 600; margin-bottom: 4px; }
 ";
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -217,6 +226,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 						let icons = grid.icons.values().filter_map(|(_, fg)| *fg);
 						colors.extend(grid.status.iter().chain(&grid.crumbs).filter_map(|c| c.fg).chain(icons));
 						colors.extend(grid.palette().into_iter().chain(grid.sel));
+						colors.extend(grid.tree.iter().flat_map(|t| t.rows.iter().filter_map(|r| r.color)));
 						if colors.len() != n || sel != grid.sel {
 							sel = grid.sel;
 							session.stylesheet(sf, "colors", Some(&colors_css(&colors, grid.sel)))?;
@@ -499,12 +509,13 @@ fn tree_pick(grid: &Grid, id: &str, nvim: &mut Nvim) -> Result<(), Box<dyn Error
 /// indented by its depth and starts with the icon Snacks draws, and the row under the picker's
 /// cursor is the selected one.
 fn tree_node(g: u64, tree: &grid::Tree) -> ui::Node {
+	let id = format!("{}.tree", win_id(g));
 	let items = tree.rows.iter().map(|row| {
-		let mut label = spans(&format!("{}{} ", "\u{a0}\u{a0}".repeat(row.depth), row.glyph), row.color, false);
+		let mut label = spans(&format!("{}{} ", "\u{2003}".repeat(row.depth), row.glyph), row.color, false);
 		label.push(ui::span(row.label.as_str()));
 		ui::item(label).key(row.id.as_str())
 	});
-	let list = ui::list().key("tree").role("sidebar").selected(tree.selected.clone()).children(items);
+	let list = ui::list().key("tree").role("sidebar").selected(format!("{id}.{}", tree.selected)).children(items);
 	ui::col().key(format!("w{g}")).role(format!("w{g}")).gap(ui::Gap::None).child(list).into()
 }
 
@@ -535,7 +546,7 @@ fn colors_css(colors: &BTreeSet<u32>, sel: Option<u32>) -> String {
 	if let Some(sel) = sel {
 		let _ = write!(vars, "--nt-sel: #{sel:06x}; ");
 	}
-	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor {{ {vars}}}")
+	format!(".sf-status, .sf-tabs, [data-role='crumbs'], .sf-editor, [data-role='sidebar'] {{ {vars}}}")
 }
 
 /// A message: one line is a toast, more is a card at the bottom that stays until a key.
